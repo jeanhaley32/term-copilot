@@ -1,0 +1,133 @@
+// Tiny markdown -> React renderer (CommonJS, no deps, no build step).
+//
+// Supports the subset Claude actually emits in chat: fenced code blocks,
+// inline `code`, **bold**, *italic*, # headings, and - / * bullet lists.
+// Everything else falls through as plain text. Good enough to make replies
+// readable without pulling in a markdown library.
+
+function makeRenderer(React) {
+  const h = React.createElement;
+
+  // --- inline: `code`, **bold**, *italic* ---------------------------------
+  function inline(text, keyPrefix) {
+    const nodes = [];
+    let i = 0;
+    let k = 0;
+    const push = (node) => nodes.push(node);
+    const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) push(text.slice(last, m.index));
+      const tok = m[0];
+      const key = `${keyPrefix}-i${k++}`;
+      if (tok.startsWith("`")) {
+        push(h("code", { key, style: S.inlineCode }, tok.slice(1, -1)));
+      } else if (tok.startsWith("**")) {
+        push(h("strong", { key }, tok.slice(2, -2)));
+      } else {
+        push(h("em", { key }, tok.slice(1, -1)));
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) push(text.slice(last));
+    return nodes;
+  }
+
+  // --- block: split into paragraphs, code fences, headings, lists ---------
+  function render(md) {
+    const lines = (md || "").split("\n");
+    const blocks = [];
+    let i = 0;
+    let k = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // fenced code block
+      if (/^\s*```/.test(line)) {
+        const buf = [];
+        i++;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+        i++; // closing fence
+        blocks.push(h("pre", { key: `b${k++}`, style: S.codeBlock }, buf.join("\n")));
+        continue;
+      }
+
+      // heading
+      const hm = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (hm) {
+        blocks.push(
+          h("div", { key: `b${k++}`, style: S.heading }, inline(hm[2], `b${k}`)),
+        );
+        i++;
+        continue;
+      }
+
+      // bullet list (consecutive - / * lines)
+      if (/^\s*[-*]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+          const content = lines[i].replace(/^\s*[-*]\s+/, "");
+          items.push(h("li", { key: `li${i}`, style: S.li }, inline(content, `li${i}`)));
+          i++;
+        }
+        blocks.push(h("ul", { key: `b${k++}`, style: S.ul }, items));
+        continue;
+      }
+
+      // blank line -> spacer
+      if (line.trim() === "") {
+        i++;
+        continue;
+      }
+
+      // paragraph: gather until blank/structural line
+      const para = [];
+      while (
+        i < lines.length &&
+        lines[i].trim() !== "" &&
+        !/^\s*```/.test(lines[i]) &&
+        !/^(#{1,4})\s+/.test(lines[i]) &&
+        !/^\s*[-*]\s+/.test(lines[i])
+      ) {
+        para.push(lines[i++]);
+      }
+      blocks.push(
+        h("div", { key: `b${k++}`, style: S.para }, inline(para.join(" "), `b${k}`)),
+      );
+    }
+    return blocks;
+  }
+
+  return render;
+}
+
+const S = {
+  para: { margin: "6px 0", whiteSpace: "pre-wrap" },
+  heading: { margin: "10px 0 4px", fontWeight: 600, color: "#aebfe0" },
+  ul: { margin: "6px 0", paddingLeft: 18 },
+  li: { margin: "2px 0" },
+  inlineCode: {
+    fontFamily: "Menlo, monospace",
+    background: "#1c2230",
+    borderRadius: 4,
+    padding: "1px 4px",
+    fontSize: "0.92em",
+    color: "#e6b673",
+  },
+  codeBlock: {
+    fontFamily: "Menlo, monospace",
+    background: "#0b0e14",
+    border: "1px solid #2a2f3a",
+    borderRadius: 6,
+    padding: 8,
+    margin: "6px 0",
+    overflowX: "auto",
+    whiteSpace: "pre",
+    fontSize: 12,
+    color: "#cfe1c0",
+  },
+};
+
+module.exports = { makeRenderer };

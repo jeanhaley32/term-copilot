@@ -10,6 +10,7 @@
 // UI is written with React.createElement (no JSX) so it needs no build step.
 
 const client = require("./client.js");
+const { makeRenderer } = require("./markdown.js");
 
 const PANEL_W = 380;
 
@@ -52,6 +53,7 @@ exports.middleware = (store) => (next) => (action) => {
 // ---------------------------------------------------------------------------
 exports.decorateHyper = (Hyper, { React }) => {
   const h = React.createElement;
+  const renderMarkdown = makeRenderer(React);
 
   class ChatPanel extends React.Component {
     constructor(props) {
@@ -66,10 +68,15 @@ exports.decorateHyper = (Hyper, { React }) => {
       this.onSubmit = this.onSubmit.bind(this);
       this.onInput = this.onInput.bind(this);
       this.onKeyDown = this.onKeyDown.bind(this);
+      this.onClear = this.onClear.bind(this);
+      this.onHotkey = this.onHotkey.bind(this);
     }
 
     componentDidMount() {
       client.connect();
+      // "Look at this" — Cmd+Shift+L focuses the panel and asks about the
+      // current screen using the buffer the bridge already has.
+      window.addEventListener("keydown", this.onHotkey, true);
       this._bind("connected", () => this.setState({ connected: true }));
       this._bind("disconnected", () => this.setState({ connected: false }));
       this._bind("chat_stream", (m) => this._appendToAssistant(m.text));
@@ -87,6 +94,31 @@ exports.decorateHyper = (Hyper, { React }) => {
 
     componentWillUnmount() {
       (this._handlers || []).forEach(([ev, fn]) => client.removeListener(ev, fn));
+      window.removeEventListener("keydown", this.onHotkey, true);
+    }
+
+    onHotkey(e) {
+      if (e.metaKey && e.shiftKey && (e.key === "l" || e.key === "L")) {
+        e.preventDefault();
+        this._ask("Look at what's on my screen right now and explain it.");
+      }
+    }
+
+    onClear() {
+      client.send({ type: "clear" });
+      this.setState({ messages: [], streaming: false });
+    }
+
+    // Send a message programmatically (used by the hotkey and the input).
+    _ask(text) {
+      if (!text || this.state.streaming) return;
+      this.setState((s) => ({
+        messages: s.messages.concat([{ role: "user", text }]),
+        input: "",
+        streaming: true,
+      }));
+      client.send({ type: "chat_msg", text });
+      if (this._taEl) this._taEl.focus();
     }
 
     _bind(ev, fn) {
@@ -120,14 +152,7 @@ exports.decorateHyper = (Hyper, { React }) => {
     }
 
     onSubmit() {
-      const text = this.state.input.trim();
-      if (!text || this.state.streaming) return;
-      this.setState((s) => ({
-        messages: s.messages.concat([{ role: "user", text }]),
-        input: "",
-        streaming: true,
-      }));
-      client.send({ type: "chat_msg", text });
+      this._ask(this.state.input.trim());
     }
 
     _rateLabel() {
@@ -144,13 +169,24 @@ exports.decorateHyper = (Hyper, { React }) => {
 
     render() {
       const S = STYLES;
-      const rows = this.state.messages.map((m, i) =>
-        h("div", { key: i, style: m.role === "user" ? S.userMsg : S.botMsg },
-          m.text || (m.role === "assistant" && this.state.streaming ? "…" : "")),
-      );
+      const rows = this.state.messages.map((m, i) => {
+        if (m.role === "user") {
+          return h("div", { key: i, style: S.userMsg }, m.text);
+        }
+        const body =
+          m.text
+            ? renderMarkdown(m.text)
+            : this.state.streaming
+              ? "…"
+              : "";
+        return h("div", { key: i, style: S.botMsg }, body);
+      });
       return h("div", { style: S.panel }, [
-        h("div", { key: "hd", style: S.header }, "◇ copilot"),
-        h("div", { key: "st", style: S.status }, this._rateLabel()),
+        h("div", { key: "hd", style: S.header }, [
+          h("span", { key: "t" }, "◇ copilot"),
+          h("button", { key: "c", style: S.clearBtn, onClick: this.onClear, title: "Clear conversation" }, "clear"),
+        ]),
+        h("div", { key: "st", style: S.status }, this._rateLabel() + "   ·   ⌘⇧L: look at screen"),
         h("div", { key: "ms", style: S.messages, ref: (el) => (this._msgEl = el) }, rows),
         h("div", { key: "in", style: S.inputRow }, [
           h("textarea", {
@@ -160,6 +196,7 @@ exports.decorateHyper = (Hyper, { React }) => {
             placeholder: this.state.streaming ? "…thinking" : "Ask about your terminal…",
             onChange: this.onInput,
             onKeyDown: this.onKeyDown,
+            ref: (el) => (this._taEl = el),
             rows: 2,
           }),
           h("button", { key: "bt", style: S.button, onClick: this.onSubmit }, "Send"),
@@ -203,7 +240,25 @@ const STYLES = {
     fontFamily: "-apple-system, Menlo, monospace",
     fontSize: 12.5,
   },
-  header: { padding: "10px 12px", fontWeight: 600, color: "#8ab4f8", letterSpacing: 1 },
+  header: {
+    padding: "10px 12px",
+    fontWeight: 600,
+    color: "#8ab4f8",
+    letterSpacing: 1,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  clearBtn: {
+    background: "transparent",
+    color: "#7e8796",
+    border: "1px solid #2a2f3a",
+    borderRadius: 5,
+    fontSize: 10,
+    padding: "2px 8px",
+    cursor: "pointer",
+    letterSpacing: 0,
+  },
   status: { padding: "0 12px 8px", fontSize: 11, color: "#7e8796" },
   messages: { flex: 1, overflowY: "auto", padding: "4px 12px", lineHeight: 1.5 },
   userMsg: {

@@ -61,15 +61,34 @@ const MAX_TERMINAL_CHARS = 12000;
 //
 // `onChunk(text)` is called with incremental text as it streams.
 // Resolves with the full reply text.
-export async function ask({ terminalContext, userMessage, cwd, onChunk }) {
+// Cap on how much prior-conversation transcript we replay for continuity.
+const MAX_HISTORY_CHARS = 6000;
+
+export async function ask({ terminalContext, userMessage, cwd, history, onChunk }) {
   // Trim the terminal buffer to its tail so a large CLAUDE.md still fits.
   let term = terminalContext || "";
   if (term.length > MAX_TERMINAL_CHARS) {
     term = "…(truncated)…\n" + term.slice(term.length - MAX_TERMINAL_CHARS);
   }
 
+  // Replay recent chat turns so follow-ups have context. Trim from the front
+  // (oldest) to a char budget so the window stays bounded.
+  let transcript = "";
+  if (Array.isArray(history) && history.length) {
+    const turns = history.map(
+      (t) => `${t.role === "user" ? "User" : "Assistant"}: ${t.text}`,
+    );
+    transcript = turns.join("\n");
+    if (transcript.length > MAX_HISTORY_CHARS) {
+      transcript = "…(earlier turns trimmed)…\n" +
+        transcript.slice(transcript.length - MAX_HISTORY_CHARS);
+    }
+    transcript = `<conversation_so_far>\n${transcript}\n</conversation_so_far>\n\n`;
+  }
+
   const prompt =
     `<recent_terminal_output>\n${term || "(empty)"}\n</recent_terminal_output>\n\n` +
+    transcript +
     `User: ${userMessage}`;
 
   let full = "";

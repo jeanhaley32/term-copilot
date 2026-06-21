@@ -34,6 +34,11 @@ let termCwd = process.cwd();
 // One breaker shared across clients — the rate limit is account-wide.
 const guard = new RateGuard();
 
+// Chat history for conversational continuity (follow-up questions). Capped so
+// it can't grow unbounded; claude.js also trims to a char budget per request.
+let history = [];
+const MAX_HISTORY_TURNS = 24; // 12 exchanges
+
 function log(...a) {
   console.log(`[bridge ${new Date().toISOString()}]`, ...a);
 }
@@ -61,19 +66,31 @@ const server = net.createServer((sock) => {
       }
       return;
     }
+    if (msg.type === "clear") {
+      history = [];
+      log("history cleared");
+      return;
+    }
     if (msg.type === "chat_msg") {
       const text = (msg.text || "").trim();
       log(`chat_msg: ${JSON.stringify(text.slice(0, 80))}`);
       if (!text) return;
       try {
-        await guard.run(() =>
+        const result = await guard.run(() =>
           ask({
             terminalContext: buffer.tail(),
             userMessage: text,
             cwd: termCwd,
+            history,
             onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
           }),
         );
+        // Record the exchange for follow-up continuity.
+        history.push({ role: "user", text });
+        history.push({ role: "assistant", text: result?.text || "" });
+        if (history.length > MAX_HISTORY_TURNS) {
+          history = history.slice(history.length - MAX_HISTORY_TURNS);
+        }
         send({ type: "chat_done" });
         log("chat_done");
       } catch (err) {

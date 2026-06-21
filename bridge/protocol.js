@@ -9,6 +9,7 @@
 //     { "type": "term_data", "data": "<raw terminal output chunk>" }
 //     { "type": "cwd",       "dir": "<terminal's current working directory>" }
 //     { "type": "chat_msg",  "text": "<user message>" }
+//     { "type": "clear" }    reset conversation history
 //   bridge -> client:
 //     { "type": "chat_stream",  "text": "<partial assistant text>" }
 //     { "type": "chat_done" }
