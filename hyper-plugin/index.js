@@ -237,7 +237,10 @@ exports.decorateHyper = (Hyper, { React }) => {
     onHotkey(e) {
       if (e.metaKey && e.shiftKey && (e.key === "l" || e.key === "L")) {
         e.preventDefault();
-        this._ask("(Take a quick look at what's on my screen now and factor it into what we're discussing — no need to explain it from scratch.)");
+        this._ask(
+          "(Take a quick look at what's on my screen now and factor it into what we're discussing — no need to explain it from scratch.)",
+          { hidden: true },
+        );
       }
     }
 
@@ -292,12 +295,16 @@ exports.decorateHyper = (Hyper, { React }) => {
       this.setState({ perm: null });
     }
 
-    // Send a message programmatically (used by the hotkey and the input).
-    _ask(text) {
+    // Send a message programmatically. `hidden` sends the prompt to the model
+    // without showing it as a user bubble — for button-triggered nudges like
+    // ⌘⇧L, where the prompt is plumbing, not part of the conversation. We push
+    // an empty assistant placeholder so its reply renders as a fresh turn.
+    _ask(text, opts) {
       if (!text || this.state.streaming) return;
+      const hidden = opts && opts.hidden;
       this.setState((s) => ({
-        messages: s.messages.concat([{ role: "user", text }]),
-        input: "",
+        messages: s.messages.concat([hidden ? { role: "assistant", text: "" } : { role: "user", text }]),
+        input: hidden ? s.input : "",
         streaming: true,
       }));
       client.send({ type: "chat_msg", text });
