@@ -18,6 +18,30 @@ Code instance** watches what you're doing in the shell and responds — on your
         terminal output ──socket──▶ bridge ──▶ Claude
 ```
 
+## Quick start
+
+```bash
+# 1. clone + install
+git clone https://github.com/jeanhaley32/term-copilot.git ~/term-copilot
+cd ~/term-copilot && npm install
+
+# 2. link the Hyper plugin
+mkdir -p ~/.hyper_plugins/local
+ln -s ~/term-copilot/hyper-plugin ~/.hyper_plugins/local/hyper-term-copilot
+#    then add  localPlugins: ["hyper-term-copilot"]  to ~/.hyper.js
+
+# 3. make sure Claude Code is logged in (subscription, no API key)
+claude          # /login if needed,  /status to check
+echo $ANTHROPIC_API_KEY   # should print nothing
+
+# 4. run
+npm run bridge  # keep this running
+open -a Hyper   # copilot panel appears on the right
+```
+
+See [Install](#install-one-time), [Run](#run), and [Troubleshooting](#troubleshooting)
+below for detail.
+
 ## Features
 
 - **Context-aware chat** — Claude sees a rolling snapshot of your recent terminal
@@ -158,9 +182,11 @@ normal use and flip it on for a long-running task you want watched.
 
 NDJSON over the socket (see `bridge/protocol.js`):
 
-- client → bridge: `term_data` · `cwd` · `chat_msg` · `clear` · `watch`
-- bridge → client: `chat_stream` · `chat_done` · `chat_error` · `rate_limited`
-  · `rate_status` · `watch_update` · `watch_state` · `status`
+- client → bridge: `term_data` · `cwd` · `chat_msg` · `clear` · `watch` ·
+  `tools` · `permission_response`
+- bridge → client: `chat_stream` · `chat_done` · `chat_error` · `rate_limited` ·
+  `rate_status` · `watch_update` · `watch_state` · `tool_use` ·
+  `permission_request` · `tools_state` · `status`
 
 ## Project layout
 
@@ -168,6 +194,42 @@ NDJSON over the socket (see `bridge/protocol.js`):
 bridge/        socket server, rolling buffer, RateGuard, Claude (Agent SDK)
 client/        dummy.js — headless test client
 hyper-plugin/  Hyper plugin: output/cwd tap, chat panel, code insert, markdown
+```
+
+## Configuration
+
+Environment variables read by the bridge (and the plugin's client):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TERM_COPILOT_SOCK` | `~/.term-copilot.sock` | Socket path. Set the same value for the bridge and Hyper if you change it. |
+| `CLAUDE_BIN` | `~/.local/bin/claude` | Path to the `claude` binary the Agent SDK spawns. Set if yours is elsewhere (`which claude`). |
+| `ANTHROPIC_API_KEY` | _(unset)_ | If set, the SDK bills the **API** instead of your subscription. Leave unset. |
+
+In-app knobs (no restart needed): the **tools** toggle, **watch** toggle +
+interval dropdown, and **clear** — all in the panel header.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Panel says `● offline` | The bridge isn't running. `cd ~/term-copilot && npm run bridge`. It reconnects automatically. |
+| No panel in Hyper | Check `localPlugins: ["hyper-term-copilot"]` in `~/.hyper.js` and the symlink in `~/.hyper_plugins/local/`. Fully quit + reopen Hyper (⌘Q). |
+| Replies error with auth/billing | Run `claude` → `/status` to confirm you're logged in; ensure `ANTHROPIC_API_KEY` is unset. |
+| `● rate-limited … back HH:MM` | You hit a subscription limit; the breaker waits until reset. Turn **watch** off or lengthen its interval. |
+| Plugin code changes not applied | Hyper caches plugins — fully quit (⌘Q) and reopen, don't just close the window. |
+| Tools never prompt for Bash/Edit | Make sure the **tools** toggle is on (amber `⚒ tools`). Read-only tools never prompt by design. |
+
+Bridge logs go to its terminal (or wherever you redirect it). It logs each
+`chat_msg`, `chat_done`, `cwd ->`, `watch`/`tools` toggle, and rate-limit event.
+
+## Uninstall
+
+```bash
+rm ~/.hyper_plugins/local/hyper-term-copilot      # unlink the plugin
+# remove "hyper-term-copilot" from localPlugins in ~/.hyper.js
+rm -rf ~/term-copilot                              # remove the project
+rm -f ~/.term-copilot.sock                         # stale socket, if any
 ```
 
 ## Roadmap
