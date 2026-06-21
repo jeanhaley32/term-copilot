@@ -41,28 +41,36 @@ anything's off.
 - **Project memory** — loads `CLAUDE.md` / `.claude/rules` from your terminal's
   current directory, exactly like Claude Code.
 - **Conversation memory** — follow-up questions remember the prior turns.
-- **Markdown rendering** — replies render with code blocks, bold, lists.
-- **Insert code into the terminal** — a `→ insert` button on any code block
-  drops the snippet at your prompt (bracketed-paste, so it doesn't auto-run).
-- **Workspace tools** — opt-in Claude-Code-style harness: Claude can read files,
-  grep, and run commands in your terminal's directory. Read-only is auto-allowed;
-  mutating actions (Bash/Edit/Write) require approval, with a per-session
-  allow-list so you don't re-approve the same action.
+- **Markdown rendering** — replies render with code blocks, bold/italic, lists,
+  and tables.
+- **Insert or run code** — each code block has a `→ insert` button (drops the
+  snippet at your prompt, doesn't run) and a `▶ run` button (pastes and executes
+  it). Both use bracketed paste so multi-line snippets land intact.
+- **Look at my screen (⌘⇧L)** — a one-key nudge that makes the copilot glance at
+  the current screen and react in the context of your conversation (the prompt
+  stays hidden from the chat).
+- **Workspace tools** — opt-in Claude-Code-style harness scoped to your terminal's
+  directory. It exposes everything Claude Code discovers — built-in tools *and
+  your own commands, skills, subagents, and MCP tools*. Read-only is auto-allowed;
+  everything else prompts for approval, with a per-session allow-list so you don't
+  re-approve the same action.
 - **Session mode** — opt-in running conversation window (like Claude Code): a
   persistent streaming SDK session so context accumulates, with the SDK's
   built-in auto-compaction when it fills (CLAUDE.md preserved). A **segmented
   context meter** (system / tools / messages / free) shows how full the window
   is. Off by default (stateless Q&A is cheaper).
 - **Save & recall sessions** — name a session and resume it later (built on the
-  SDK's `resume`); the model picks up the prior conversation's memory.
-- **Slash commands** — in session mode, type `/` to autocomplete the SDK's
-  commands (`/compact`, `/context`, `/clear`, `/usage`, …); they execute in the
-  live session.
+  SDK's `resume`); the model regains the prior conversation's memory *and* the
+  panel repaints it from Claude Code's transcript.
+- **Slash commands** — in session mode, type `/` for a selectable popup of your
+  Claude Code commands (`/compact`, `/context`, `/clear`, `/usage`, plus your own
+  custom commands); ↑/↓ to pick, and they execute in the live session.
 - **Terminal paging** — a `read_terminal` tool lets the model page into a large
   scrollback on demand, so prompts inject only a small slice instead of dumping
   everything.
 - **Watch mode** — opt-in live updates that summarize new activity, with
   guardrails so an idle terminal costs nothing.
+- **Resizable panel** — drag the panel's left edge; the width is remembered.
 - **Rate-limit resilient** — a circuit breaker that respects the server's reset
   time and backs off, so you never hang or spam a limit.
 
