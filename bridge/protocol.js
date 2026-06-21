@@ -11,6 +11,9 @@
 //     { "type": "chat_msg",  "text": "<user message>" }
 //     { "type": "clear" }    reset conversation history
 //     { "type": "watch",     "on": bool, "intervalMs"? } toggle watch mode
+//     { "type": "tools",     "on": bool } toggle workspace tools
+//     { "type": "permission_response", "id", "decision": "allow"|"deny",
+//                            "scope": "once"|"session"|"session-tool" }
 //   bridge -> client:
 //     { "type": "chat_stream",  "text": "<partial assistant text>" }
 //     { "type": "chat_done" }
@@ -19,6 +22,9 @@
 //     { "type": "rate_status",  "status": { state, openUntil, rateLimitType, ... } }
 //     { "type": "watch_update", "text": "<note about new terminal activity>" }
 //     { "type": "watch_state",  "on": bool, "intervalMs" }
+//     { "type": "tool_use",     "name", "detail" } Claude used a tool
+//     { "type": "permission_request", "id", "name", "detail", "signature" }
+//     { "type": "tools_state",  "on": bool }
 //     { "type": "status",       "text": "<human-readable status>" }
 
 export function encode(obj) {

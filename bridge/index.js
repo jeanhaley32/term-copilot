@@ -34,6 +34,52 @@ let termCwd = process.cwd();
 // Static environment facts the harness shares with Claude each interaction.
 const ENV_META = { shell: process.env.SHELL || null, os: process.platform };
 
+// ---- workspace tools (Claude-Code-style harness) -----------------------
+// Off by default. When on, Claude can use these tools scoped to the terminal's
+// cwd. Read-only tools are auto-allowed; mutating tools (Bash/Edit/Write) are
+// gated by a per-session allow-list, prompting the user otherwise.
+const TOOLSET = ["Read", "Grep", "Glob", "LS", "Bash", "Edit", "Write", "MultiEdit"];
+const READONLY_TOOLS = new Set(["Read", "Grep", "Glob", "LS", "NotebookRead"]);
+const tools = { on: false, allow: new Set() }; // allow = session-approved signatures
+const pendingPerms = new Map(); // id -> resolver
+let permSeq = 0;
+
+function toolSignature(name, input) {
+  if (name === "Bash") return "Bash:" + (input.command || "");
+  if (["Edit", "Write", "MultiEdit"].includes(name))
+    return name + ":" + (input.file_path || input.path || "");
+  return name + ":*";
+}
+function toolDetail(name, input) {
+  if (name === "Bash") return input.command || "";
+  if (input.file_path || input.path) return input.file_path || input.path;
+  return JSON.stringify(input).slice(0, 200);
+}
+
+// Permission callback handed to the Agent SDK. Returns a PermissionResult.
+function makeCanUseTool() {
+  return (name, input) => {
+    if (READONLY_TOOLS.has(name)) return { behavior: "allow", updatedInput: input };
+    const sig = toolSignature(name, input);
+    if (tools.allow.has(sig) || tools.allow.has(name + ":*")) {
+      return { behavior: "allow", updatedInput: input };
+    }
+    const id = "perm" + ++permSeq;
+    broadcast({ type: "permission_request", id, name, detail: toolDetail(name, input), signature: sig });
+    return new Promise((resolve) => {
+      pendingPerms.set(id, (resp) => {
+        if (resp.decision === "allow") {
+          if (resp.scope === "session") tools.allow.add(sig);
+          if (resp.scope === "session-tool") tools.allow.add(name + ":*");
+          resolve({ behavior: "allow", updatedInput: input });
+        } else {
+          resolve({ behavior: "deny", message: "Denied by user." });
+        }
+      });
+    });
+  };
+}
+
 // One breaker shared across clients — the rate limit is account-wide.
 const guard = new RateGuard();
 
@@ -143,6 +189,21 @@ const server = net.createServer((sock) => {
       log("history cleared");
       return;
     }
+    if (msg.type === "tools") {
+      tools.on = !!msg.on;
+      if (!tools.on) tools.allow.clear(); // drop session approvals when disabled
+      log(`tools ${tools.on ? "on" : "off"}`);
+      broadcast({ type: "tools_state", on: tools.on });
+      return;
+    }
+    if (msg.type === "permission_response") {
+      const fn = pendingPerms.get(msg.id);
+      if (fn) {
+        pendingPerms.delete(msg.id);
+        fn(msg);
+      }
+      return;
+    }
     if (msg.type === "watch") {
       watch.on = !!msg.on;
       if (msg.intervalMs) {
@@ -164,7 +225,16 @@ const server = net.createServer((sock) => {
             userMessage: text,
             cwd: termCwd,
             history,
-            meta: Object.assign({ mode: "chat" }, ENV_META),
+            meta: Object.assign({ mode: "chat", tools: tools.on }, ENV_META),
+            tools: tools.on
+              ? {
+                  enabled: true,
+                  allowedTools: TOOLSET,
+                  canUseTool: makeCanUseTool(),
+                  onTool: (t) =>
+                    send({ type: "tool_use", name: t.name, detail: toolDetail(t.name, t.input) }),
+                }
+              : null,
             onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
           }),
         );
@@ -211,6 +281,7 @@ const server = net.createServer((sock) => {
 
   send({ type: "status", text: "connected to term-copilot bridge" });
   send({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
+  send({ type: "tools_state", on: tools.on });
 });
 
 server.listen(SOCK, () => {

@@ -88,7 +88,15 @@ function harnessContext({ cwd, shell, os, mode } = {}) {
   );
 }
 
-export async function ask({ terminalContext, userMessage, cwd, history, meta, onChunk }) {
+export async function ask({
+  terminalContext,
+  userMessage,
+  cwd,
+  history,
+  meta,
+  tools, // { enabled, allowedTools, canUseTool, onTool } or null
+  onChunk,
+}) {
   // Trim the terminal buffer to its tail so a large CLAUDE.md still fits.
   let term = terminalContext || "";
   if (term.length > MAX_TERMINAL_CHARS) {
@@ -122,19 +130,24 @@ export async function ask({ terminalContext, userMessage, cwd, history, meta, on
   let usage = null; // token usage from the result
   let rateLimits = null; // per-bucket utilization/resets from the result
 
-  const q = query({
-    prompt,
-    options: {
-      systemPrompt: COPILOT_PROMPT,
-      allowedTools: [],
-      maxTurns: 1,
-      includePartialMessages: true,
-      pathToClaudeCodeExecutable: CLAUDE_BIN,
-      // Resolve project memory from the terminal's directory, not ours.
-      cwd: cwd || process.cwd(),
-      settingSources: ["user", "project", "local"],
-    },
-  });
+  const useTools = !!(tools && tools.enabled);
+  const options = {
+    systemPrompt: COPILOT_PROMPT,
+    allowedTools: useTools ? tools.allowedTools : [],
+    // Tool use needs room to loop (read files, run a command, then answer).
+    maxTurns: useTools ? 16 : 1,
+    includePartialMessages: true,
+    pathToClaudeCodeExecutable: CLAUDE_BIN,
+    // Resolve project memory + run tools from the terminal's directory.
+    cwd: cwd || process.cwd(),
+    settingSources: ["user", "project", "local"],
+  };
+  if (useTools) {
+    options.permissionMode = "default";
+    options.canUseTool = tools.canUseTool;
+  }
+
+  const q = query({ prompt, options });
 
   for await (const msg of q) {
     if (msg.type === "stream_event") {
@@ -144,12 +157,14 @@ export async function ask({ terminalContext, userMessage, cwd, history, meta, on
         full += ev.delta.text;
         onChunk?.(ev.delta.text);
       }
-    } else if (msg.type === "assistant" && !sawDelta) {
-      // Fallback if partial streaming wasn't emitted: take the final text.
+    } else if (msg.type === "assistant") {
       for (const block of msg.message?.content || []) {
-        if (block.type === "text") {
+        if (block.type === "text" && !sawDelta) {
+          // Fallback if partial streaming wasn't emitted: take the final text.
           full += block.text;
           onChunk?.(block.text);
+        } else if (block.type === "tool_use") {
+          tools?.onTool?.({ name: block.name, input: block.input || {} });
         }
       }
     } else if (msg.type === "rate_limit_event") {

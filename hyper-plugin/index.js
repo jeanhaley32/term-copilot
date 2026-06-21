@@ -101,6 +101,8 @@ exports.decorateHyper = (Hyper, { React }) => {
         watchOn: false,
         watchText: "", // latest watch_update note
         intervalMs: 10000, // watch cadence
+        toolsOn: false,
+        perm: null, // pending permission request { id, name, detail, signature }
       };
       this.onSubmit = this.onSubmit.bind(this);
       this.onInput = this.onInput.bind(this);
@@ -109,6 +111,8 @@ exports.decorateHyper = (Hyper, { React }) => {
       this.onHotkey = this.onHotkey.bind(this);
       this.onToggleWatch = this.onToggleWatch.bind(this);
       this.onChangeInterval = this.onChangeInterval.bind(this);
+      this.onToggleTools = this.onToggleTools.bind(this);
+      this.respondPerm = this.respondPerm.bind(this);
     }
 
     componentDidMount() {
@@ -133,6 +137,15 @@ exports.decorateHyper = (Hyper, { React }) => {
         this.setState({ watchOn: !!m.on, intervalMs: m.intervalMs || this.state.intervalMs }),
       );
       this._bind("watch_update", (m) => this.setState({ watchText: m.text }));
+      this._bind("tools_state", (m) => this.setState({ toolsOn: !!m.on }));
+      this._bind("tool_use", (m) =>
+        this.setState((s) => ({
+          messages: s.messages.concat([
+            { role: "tool", text: m.name + (m.detail ? " · " + m.detail : "") },
+          ]),
+        })),
+      );
+      this._bind("permission_request", (m) => this.setState({ perm: m }));
     }
 
     componentWillUnmount() {
@@ -163,6 +176,19 @@ exports.decorateHyper = (Hyper, { React }) => {
       this.setState({ intervalMs });
       // If watching, re-arm at the new cadence; otherwise just remember it.
       if (this.state.watchOn) client.send({ type: "watch", on: true, intervalMs });
+    }
+
+    onToggleTools() {
+      const on = !this.state.toolsOn;
+      this.setState({ toolsOn: on });
+      client.send({ type: "tools", on });
+    }
+
+    respondPerm(decision, scope) {
+      const p = this.state.perm;
+      if (!p) return;
+      client.send({ type: "permission_response", id: p.id, decision, scope });
+      this.setState({ perm: null });
     }
 
     // Send a message programmatically (used by the hotkey and the input).
@@ -229,6 +255,9 @@ exports.decorateHyper = (Hyper, { React }) => {
         if (m.role === "user") {
           return h("div", { key: i, style: S.userMsg }, m.text);
         }
+        if (m.role === "tool") {
+          return h("div", { key: i, style: S.toolMsg }, "🔧 " + m.text);
+        }
         const body =
           m.text
             ? renderMarkdown(m.text)
@@ -242,11 +271,18 @@ exports.decorateHyper = (Hyper, { React }) => {
         S.clearBtn,
         this.state.watchOn ? S.watchBtnOn : null,
       );
+      const toolsBtnStyle = Object.assign(
+        {},
+        S.clearBtn,
+        this.state.toolsOn ? S.toolsBtnOn : null,
+      );
       return h("div", { style: S.panel }, [
         h("div", { key: "hd", style: S.header }, [
           h("span", { key: "t" }, "◇ copilot"),
           h("span", { key: "btns" }, [
-            h("button", { key: "w", style: watchBtnStyle, onClick: this.onToggleWatch, title: "Watch mode: auto-summarize new activity" },
+            h("button", { key: "tl", style: toolsBtnStyle, onClick: this.onToggleTools, title: "Workspace tools: let Claude read files / run commands (with approval)" },
+              this.state.toolsOn ? "⚒ tools" : "tools"),
+            h("button", { key: "w", style: Object.assign({ marginLeft: 6 }, watchBtnStyle), onClick: this.onToggleWatch, title: "Watch mode: auto-summarize new activity" },
               this.state.watchOn ? "● watching" : "watch"),
             h("select", {
               key: "iv",
@@ -267,6 +303,17 @@ exports.decorateHyper = (Hyper, { React }) => {
           ? h("div", { key: "wb", style: S.watchBanner }, "👁  " + this.state.watchText)
           : null,
         h("div", { key: "ms", style: S.messages, ref: (el) => (this._msgEl = el) }, rows),
+        this.state.perm
+          ? h("div", { key: "perm", style: S.permCard }, [
+              h("div", { key: "q", style: S.permTitle }, "Allow " + this.state.perm.name + "?"),
+              h("div", { key: "d", style: S.permDetail }, this.state.perm.detail || ""),
+              h("div", { key: "btns", style: S.permBtns }, [
+                h("button", { key: "1", style: S.permAllow, onClick: () => this.respondPerm("allow", "once") }, "Allow once"),
+                h("button", { key: "2", style: S.permAllow, onClick: () => this.respondPerm("allow", "session") }, "Allow for session"),
+                h("button", { key: "3", style: S.permDeny, onClick: () => this.respondPerm("deny") }, "Deny"),
+              ]),
+            ])
+          : null,
         h("div", { key: "in", style: S.inputRow }, [
           h("textarea", {
             key: "ta",
@@ -339,6 +386,42 @@ const STYLES = {
     letterSpacing: 0,
   },
   watchBtnOn: { color: "#7ee0a1", borderColor: "#2e6f4a", background: "#10261a" },
+  toolsBtnOn: { color: "#e6b673", borderColor: "#6f5320", background: "#26200f" },
+  permCard: {
+    margin: "0 12px 8px",
+    padding: "8px 10px",
+    background: "#1b1605",
+    border: "1px solid #6f5320",
+    borderRadius: 6,
+  },
+  permTitle: { color: "#e6b673", fontWeight: 600, marginBottom: 4 },
+  permDetail: {
+    fontFamily: "Menlo, monospace",
+    fontSize: 11,
+    color: "#cdd3de",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
+    marginBottom: 8,
+  },
+  permBtns: { display: "flex", gap: 6, flexWrap: "wrap" },
+  permAllow: {
+    background: "#1c3326",
+    color: "#7ee0a1",
+    border: "1px solid #2e6f4a",
+    borderRadius: 5,
+    fontSize: 11,
+    padding: "3px 9px",
+    cursor: "pointer",
+  },
+  permDeny: {
+    background: "#33191c",
+    color: "#e08a8a",
+    border: "1px solid #6f2e2e",
+    borderRadius: 5,
+    fontSize: 11,
+    padding: "3px 9px",
+    cursor: "pointer",
+  },
   intervalSel: {
     background: "#10131a",
     color: "#7e8796",
@@ -369,6 +452,18 @@ const STYLES = {
     color: "#e7ecf5",
   },
   botMsg: { whiteSpace: "pre-wrap", margin: "8px 0", padding: "2px 0", color: "#c2c9d6" },
+  toolMsg: {
+    margin: "3px 0",
+    padding: "3px 8px",
+    fontFamily: "Menlo, monospace",
+    fontSize: 11,
+    color: "#8a93a6",
+    background: "#0e1219",
+    borderLeft: "2px solid #2e6f4a",
+    borderRadius: 3,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
+  },
   inputRow: { display: "flex", padding: 8, gap: 6, borderTop: "1px solid #2a2f3a" },
   textarea: {
     flex: 1,

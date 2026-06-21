@@ -30,6 +30,10 @@ Code instance** watches what you're doing in the shell and responds — on your
 - **Markdown rendering** — replies render with code blocks, bold, lists.
 - **Insert code into the terminal** — a `→ insert` button on any code block
   drops the snippet at your prompt (bracketed-paste, so it doesn't auto-run).
+- **Workspace tools** — opt-in Claude-Code-style harness: Claude can read files,
+  grep, and run commands in your terminal's directory. Read-only is auto-allowed;
+  mutating actions (Bash/Edit/Write) require approval, with a per-session
+  allow-list so you don't re-approve the same action.
 - **Watch mode** — opt-in live updates that summarize new activity, with
   guardrails so an idle terminal costs nothing.
 - **Rate-limit resilient** — a circuit breaker that respects the server's reset
@@ -122,8 +126,21 @@ warning on startup if `ANTHROPIC_API_KEY` is set, since that would bill the API.
 - **Ask** — type in the box, Enter to send (Shift+Enter for a newline).
 - **⌘⇧L** — "look at this": ask about whatever's on screen right now.
 - **→ insert** — on a code block, drops the snippet at your shell prompt.
+- **tools** — toggle the workspace harness (see below).
 - **watch** — toggle live updates; the dropdown sets the cadence (10s/30s/60s).
 - **clear** — reset the conversation.
+
+### Workspace tools
+
+Toggle **tools** to let Claude actually act in your terminal's directory, not
+just observe it:
+
+- **Read-only** (`Read`, `Grep`, `Glob`, `LS`) — auto-allowed, no prompts.
+- **Mutating** (`Bash`, `Edit`, `Write`) — each action prompts in the panel with
+  **Allow once / Allow for session / Deny**. "Allow for session" whitelists that
+  specific action (e.g. the exact command) so it won't re-ask.
+- Tool activity is shown inline (`🔧 Bash · npm test`) as Claude works.
+- Toggling tools off clears the session allow-list.
 
 ### Watch mode
 
