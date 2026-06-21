@@ -260,6 +260,9 @@ function diskSessions(cwd) {
       const buf = Buffer.alloc(65536);
       const n = fs.readSync(fd, buf, 0, 65536, 0);
       fs.closeSync(fd);
+      // Skip system/command-wrapper first turns; label with the first genuine
+      // human message.
+      const noise = /^(<(local-command|command-name|command-message|command-args|system-reminder)|Caveat:|<recent_terminal_output)/;
       for (const line of buf.toString("utf8", 0, n).split("\n")) {
         if (!line.trim()) continue;
         let r;
@@ -276,11 +279,11 @@ function diskSessions(cwd) {
               : Array.isArray(c)
                 ? c.filter((b) => b.type === "text").map((b) => b.text).join("")
                 : "";
-          t = t.replace(/<recent_terminal_output>[\s\S]*?<\/recent_terminal_output>/g, "");
-          const i = t.lastIndexOf("\nUser: ");
-          if (i !== -1) t = t.slice(i + 7);
+          t = t.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, " ").replace(/\s+/g, " ");
+          const i = t.lastIndexOf("User: ");
+          if (i !== -1) t = t.slice(i + 6);
           t = t.trim();
-          if (t) { label = t.slice(0, 60); break; }
+          if (t && !noise.test(t)) { label = t.slice(0, 60); break; }
         }
       }
     } catch {
