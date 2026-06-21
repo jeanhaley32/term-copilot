@@ -53,6 +53,8 @@ anything's off.
   built-in auto-compaction when it fills (CLAUDE.md preserved). A **segmented
   context meter** (system / tools / messages / free) shows how full the window
   is. Off by default (stateless Q&A is cheaper).
+- **Save & recall sessions** — name a session and resume it later (built on the
+  SDK's `resume`); the model picks up the prior conversation's memory.
 - **Slash commands** — in session mode, type `/` to autocomplete the SDK's
   commands (`/compact`, `/context`, `/clear`, `/usage`, …); they execute in the
   live session.
@@ -168,6 +170,17 @@ warning on startup if `ANTHROPIC_API_KEY` is set, since that would bill the API.
 - **clear** — reset the conversation.
 - **Resize** — drag the panel's left edge (width is remembered).
 
+### Saving & recalling sessions
+
+The **`▾`** button next to the session toggle opens a popup to **save the current
+session** under a name and **recall** past ones. Saving remembers the SDK session
+id (in `~/.term-copilot/sessions.json`); recalling uses the SDK's `resume`, so
+the model picks up the prior conversation's full memory. Click a saved name to
+resume it, `×` to delete. (Saving again with a new name renames it.)
+
+Recall restores the *model's* memory of the conversation; the visible panel
+starts fresh with a "↩ resumed" note.
+
 ### Session mode (running context window)
 
 By default each message is a fresh, bounded query (cheap, no growing window).
@@ -224,11 +237,12 @@ normal use and flip it on for a long-running task you want watched.
 NDJSON over the socket (see `bridge/protocol.js`):
 
 - client → bridge: `term_data` · `cwd` · `chat_msg` · `clear` · `watch` ·
-  `tools` · `session` · `permission_response`
+  `tools` · `session` · `permission_response` · `session_list` ·
+  `session_save` · `session_rename` · `session_delete` · `session_resume`
 - bridge → client: `chat_stream` · `chat_done` · `chat_error` · `rate_limited` ·
   `rate_status` · `watch_update` · `watch_state` · `tool_use` ·
   `permission_request` · `tools_state` · `session_state` · `context` ·
-  `slash_commands` · `status`
+  `slash_commands` · `sessions` · `session_resumed` · `status`
 
 ## Project layout
 

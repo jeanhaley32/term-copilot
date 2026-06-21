@@ -21,6 +21,7 @@ export class LiveSession {
     this._sawDelta = false;
     this.q = null;
     this.started = false;
+    this.sessionId = options.resume || null; // the SDK session id (for save/resume)
   }
 
   // The open-ended input the SDK consumes; yields queued user turns and parks
@@ -62,6 +63,10 @@ export class LiveSession {
     for await (const msg of this.q) {
       if (msg.type === "system" && msg.subtype === "init") {
         if (Array.isArray(msg.slash_commands)) this.h.onSlash?.(msg.slash_commands);
+        if (msg.session_id) {
+          this.sessionId = msg.session_id;
+          this.h.onSessionId?.(this.sessionId);
+        }
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
         if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
@@ -80,6 +85,10 @@ export class LiveSession {
         if (msg.rate_limit_info?.status === "rejected") this.h.onRate?.(msg.rate_limit_info);
       } else if (msg.type === "result") {
         this._sawDelta = false;
+        if (msg.session_id && msg.session_id !== this.sessionId) {
+          this.sessionId = msg.session_id;
+          this.h.onSessionId?.(this.sessionId);
+        }
         this.h.onResult?.(msg);
         // Read the segmented context window for the meter.
         try {

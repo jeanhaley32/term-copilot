@@ -133,8 +133,13 @@ exports.decorateHyper = (Hyper, { React }) => {
         slashCommands: DEFAULT_SLASH, // seeded; replaced by the live list on init
         slashSel: 0, // highlighted index in the slash popup
         slashHidden: false, // dismissed with Esc until next keystroke
+        sessions: [], // saved sessions [{ name, sessionId, cwd, savedAt }]
+        showSessions: false,
+        saveName: "",
       };
       this.onToggleSession = this.onToggleSession.bind(this);
+      this.onToggleSessions = this.onToggleSessions.bind(this);
+      this.onSaveSession = this.onSaveSession.bind(this);
       this.onDragStart = this.onDragStart.bind(this);
       this._onDrag = this._onDrag.bind(this);
       this._endDrag = this._endDrag.bind(this);
@@ -192,6 +197,13 @@ exports.decorateHyper = (Hyper, { React }) => {
       this._bind("slash_commands", (m) => {
         if (Array.isArray(m.commands) && m.commands.length) this.setState({ slashCommands: m.commands });
       });
+      this._bind("sessions", (m) => this.setState({ sessions: m.list || [] }));
+      this._bind("session_resumed", (m) =>
+        this.setState({
+          messages: [{ role: "note", text: "↩ resumed: " + (m.name || "session") }],
+          showSessions: false,
+        }),
+      );
     }
 
     componentWillUnmount() {
@@ -280,6 +292,27 @@ exports.decorateHyper = (Hyper, { React }) => {
       const on = !this.state.sessionOn;
       this.setState({ sessionOn: on, ctx: on ? this.state.ctx : null });
       client.send({ type: "session", on });
+    }
+
+    onToggleSessions() {
+      const show = !this.state.showSessions;
+      if (show) client.send({ type: "session_list" });
+      this.setState({ showSessions: show });
+    }
+
+    onSaveSession() {
+      const name = this.state.saveName.trim();
+      if (!name) return;
+      client.send({ type: "session_save", name });
+      this.setState({ saveName: "" });
+    }
+
+    _resumeSession(sessionId) {
+      client.send({ type: "session_resume", sessionId });
+    }
+
+    _deleteSession(sessionId) {
+      client.send({ type: "session_delete", sessionId });
     }
 
     onToggleTools() {
@@ -402,6 +435,44 @@ exports.decorateHyper = (Hyper, { React }) => {
       ]);
     }
 
+    _renderSessions() {
+      const h = React.createElement;
+      const S = STYLES;
+      const items = this.state.sessions.length
+        ? this.state.sessions.map((s) =>
+            h("div", { key: s.sessionId, style: S.sessRow }, [
+              h("button", {
+                key: "n",
+                style: S.sessName,
+                title: "Resume this session",
+                onClick: () => this._resumeSession(s.sessionId),
+              }, "↩ " + s.name),
+              h("button", {
+                key: "x",
+                style: S.sessDel,
+                title: "Delete",
+                onClick: () => this._deleteSession(s.sessionId),
+              }, "×"),
+            ]),
+          )
+        : [h("div", { key: "empty", style: S.sessEmpty }, "No saved sessions yet.")];
+      return h("div", { key: "sessions", style: S.sessMenu }, [
+        h("div", { key: "save", style: S.sessSaveRow }, [
+          h("input", {
+            key: "in",
+            style: S.sessInput,
+            placeholder: this.state.sessionOn ? "name this session…" : "turn on session to save",
+            value: this.state.saveName,
+            disabled: !this.state.sessionOn,
+            onChange: (e) => this.setState({ saveName: e.target.value }),
+            onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.onSaveSession(); } },
+          }),
+          h("button", { key: "b", style: S.sessSaveBtn, onClick: this.onSaveSession, disabled: !this.state.sessionOn }, "save"),
+        ]),
+        ...items,
+      ]);
+    }
+
     _renderSlashMenu() {
       const h = React.createElement;
       const matches = this._slashMatches();
@@ -441,6 +512,9 @@ exports.decorateHyper = (Hyper, { React }) => {
         if (m.role === "tool") {
           return h("div", { key: i, style: S.toolMsg }, "🔧 " + m.text);
         }
+        if (m.role === "note") {
+          return h("div", { key: i, style: S.noteMsg }, m.text);
+        }
         const body =
           m.text
             ? renderMarkdown(m.text)
@@ -476,6 +550,7 @@ exports.decorateHyper = (Hyper, { React }) => {
           h("span", { key: "btns" }, [
             h("button", { key: "se", style: sessionBtnStyle, onClick: this.onToggleSession, title: "Session mode: a running conversation window (auto-compacts when full)" },
               this.state.sessionOn ? "∞ session" : "session"),
+            h("button", { key: "sv", style: Object.assign({ marginLeft: 6 }, S.clearBtn), onClick: this.onToggleSessions, title: "Save / recall sessions" }, "▾"),
             h("button", { key: "tl", style: Object.assign({ marginLeft: 6 }, toolsBtnStyle), onClick: this.onToggleTools, title: "Workspace tools: let Claude read files / run commands (with approval)" },
               this.state.toolsOn ? "⚒ tools" : "tools"),
             h("button", { key: "w", style: Object.assign({ marginLeft: 6 }, watchBtnStyle), onClick: this.onToggleWatch, title: "Watch mode: auto-summarize new activity" },
@@ -499,6 +574,7 @@ exports.decorateHyper = (Hyper, { React }) => {
         this.state.watchOn && this.state.watchText
           ? h("div", { key: "wb", style: S.watchBanner }, "👁  " + this.state.watchText)
           : null,
+        this.state.showSessions ? this._renderSessions() : null,
         h("div", { key: "ms", style: S.messages, ref: (el) => (this._msgEl = el) }, rows),
         this.state.perm
           ? h("div", { key: "perm", style: S.permCard }, [
@@ -595,6 +671,54 @@ const STYLES = {
   watchBtnOn: { color: "#7ee0a1", borderColor: "#2e6f4a", background: "#10261a" },
   toolsBtnOn: { color: "#e6b673", borderColor: "#6f5320", background: "#26200f" },
   sessionBtnOn: { color: "#8ab4f8", borderColor: "#2b4a6f", background: "#0f1a26" },
+  noteMsg: { margin: "8px 0", textAlign: "center", fontSize: 11, color: "#7e8796", fontStyle: "italic" },
+  sessMenu: {
+    margin: "0 12px 8px",
+    background: "#0b0e14",
+    border: "1px solid #2a2f3a",
+    borderRadius: 6,
+    maxHeight: 260,
+    overflowY: "auto",
+  },
+  sessSaveRow: { display: "flex", gap: 6, padding: 8, borderBottom: "1px solid #1c2230" },
+  sessInput: {
+    flex: 1,
+    background: "#10131a",
+    color: "#e7ecf5",
+    border: "1px solid #2a2f3a",
+    borderRadius: 5,
+    padding: "3px 7px",
+    fontSize: 11.5,
+  },
+  sessSaveBtn: {
+    background: "#1c2940",
+    color: "#8ab4f8",
+    border: "1px solid #2b4a6f",
+    borderRadius: 5,
+    fontSize: 11,
+    padding: "0 10px",
+    cursor: "pointer",
+  },
+  sessRow: { display: "flex", alignItems: "center", borderBottom: "1px solid #12151c" },
+  sessName: {
+    flex: 1,
+    textAlign: "left",
+    background: "transparent",
+    color: "#cdd3de",
+    border: 0,
+    padding: "6px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  sessDel: {
+    background: "transparent",
+    color: "#7e8796",
+    border: 0,
+    padding: "6px 10px",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  sessEmpty: { padding: "8px 10px", fontSize: 11, color: "#5f6878" },
   ctxWrap: { padding: "0 12px 8px" },
   ctxLabel: { fontSize: 10, color: "#7e8796", marginBottom: 3 },
   ctxBar: { height: 5, display: "flex", background: "#1c2230", borderRadius: 3, overflow: "hidden" },

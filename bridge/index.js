@@ -148,10 +148,16 @@ function buildSessionOptions() {
 }
 
 let lastSlash = [];
-function startLiveSession() {
+function startLiveSession(resumeId) {
   if (session.live) return;
   session.firstTurn = true;
-  session.live = new LiveSession(buildSessionOptions(), {
+  session.id = resumeId || null;
+  const options = buildSessionOptions();
+  if (resumeId) options.resume = resumeId;
+  session.live = new LiveSession(options, {
+    onSessionId: (id) => {
+      session.id = id;
+    },
     onChunk: (t) => broadcast({ type: "chat_stream", text: t }),
     onTool: (t) => broadcast({ type: "tool_use", name: t.name, detail: toolDetail(t.name, t.input) }),
     onResult: () => broadcast({ type: "chat_done" }),
@@ -183,6 +189,7 @@ function stopLiveSession() {
   if (session.live) {
     session.live.stop();
     session.live = null;
+    session.id = null;
     lastSlash = [];
     log("live session stopped");
   }
@@ -200,7 +207,29 @@ const MAX_HISTORY_TURNS = 24; // 12 exchanges
 // Off by default (cheap stateless Q&A). When on, a LiveSession keeps one
 // streaming query alive — the running context window — with segmented usage and
 // slash commands. SDK auto-compacts it when full (CLAUDE.md preserved).
-const session = { on: false, live: null, firstTurn: true };
+const session = { on: false, live: null, firstTurn: true, id: null };
+
+// Saved sessions: friendly name -> SDK session id, persisted so you can recall a
+// past conversation later via the SDK's resume.
+const STORE_DIR = path.join(os.homedir(), ".term-copilot");
+const SESSIONS_FILE = path.join(STORE_DIR, "sessions.json");
+
+function loadSessions() {
+  try {
+    return JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf8"));
+  } catch {
+    return [];
+  }
+}
+function saveSessions(list) {
+  try {
+    fs.mkdirSync(STORE_DIR, { recursive: true });
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(list, null, 2));
+  } catch (e) {
+    log("sessions save failed:", e.message);
+  }
+}
+let savedSessions = loadSessions();
 
 // ---- watch mode --------------------------------------------------------
 // Periodically summarize NEW terminal activity — but only when the buffer
@@ -309,6 +338,49 @@ const server = net.createServer((sock) => {
       else stopLiveSession();
       log(`session ${session.on ? "on" : "off"}`);
       broadcast({ type: "session_state", on: session.on });
+      return;
+    }
+    if (msg.type === "session_list") {
+      send({ type: "sessions", list: savedSessions });
+      return;
+    }
+    if (msg.type === "session_save") {
+      // Save (or rename) the current live session under a friendly name.
+      const name = (msg.name || "").trim();
+      if (!name || !session.id) {
+        send({ type: "sessions", list: savedSessions });
+        return;
+      }
+      savedSessions = savedSessions.filter((s) => s.sessionId !== session.id);
+      savedSessions.unshift({ name, sessionId: session.id, cwd: termCwd, savedAt: Date.now() });
+      saveSessions(savedSessions);
+      log(`session saved: ${name} (${session.id})`);
+      broadcast({ type: "sessions", list: savedSessions });
+      return;
+    }
+    if (msg.type === "session_rename") {
+      savedSessions = savedSessions.map((s) =>
+        s.sessionId === msg.sessionId ? { ...s, name: (msg.name || s.name).trim() } : s,
+      );
+      saveSessions(savedSessions);
+      broadcast({ type: "sessions", list: savedSessions });
+      return;
+    }
+    if (msg.type === "session_delete") {
+      savedSessions = savedSessions.filter((s) => s.sessionId !== msg.sessionId);
+      saveSessions(savedSessions);
+      broadcast({ type: "sessions", list: savedSessions });
+      return;
+    }
+    if (msg.type === "session_resume") {
+      if (!msg.sessionId) return;
+      stopLiveSession();
+      session.on = true;
+      startLiveSession(msg.sessionId);
+      const saved = savedSessions.find((s) => s.sessionId === msg.sessionId);
+      log(`session resumed: ${saved ? saved.name : msg.sessionId}`);
+      broadcast({ type: "session_state", on: true });
+      broadcast({ type: "session_resumed", name: saved ? saved.name : "session" });
       return;
     }
     if (msg.type === "tools") {
@@ -427,6 +499,7 @@ const server = net.createServer((sock) => {
   send({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
   send({ type: "tools_state", on: tools.on });
   send({ type: "session_state", on: session.on });
+  send({ type: "sessions", list: savedSessions });
   if (lastSlash.length) send({ type: "slash_commands", commands: lastSlash });
 });
 
