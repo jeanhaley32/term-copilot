@@ -35,6 +35,38 @@ function makeRenderer(React, opts) {
     return nodes;
   }
 
+  // GFM table helpers
+  function splitCells(line) {
+    let parts = line.split("|");
+    if (parts.length && parts[0].trim() === "") parts.shift();
+    if (parts.length && parts[parts.length - 1].trim() === "") parts.pop();
+    return parts.map((s) => s.trim());
+  }
+  function isSeparator(line) {
+    return /\|/.test(line) && /-/.test(line) && /^[\s:|-]+$/.test(line);
+  }
+
+  function renderTable(header, rows, key) {
+    const head = h(
+      "tr",
+      { key: "h" },
+      header.map((c, i) => h("th", { key: i, style: S.th }, inline(c, `th${i}`))),
+    );
+    const body = rows.map((r, ri) =>
+      h(
+        "tr",
+        { key: ri },
+        r.map((c, ci) => h("td", { key: ci, style: S.td }, inline(c, `td${ri}-${ci}`))),
+      ),
+    );
+    return h("div", { key, style: S.tableWrap }, [
+      h("table", { key: "t", style: S.table }, [
+        h("thead", { key: "th" }, head),
+        h("tbody", { key: "tb" }, body),
+      ]),
+    ]);
+  }
+
   // --- block: split into paragraphs, code fences, headings, lists ---------
   function render(md) {
     const lines = (md || "").split("\n");
@@ -68,6 +100,19 @@ function makeRenderer(React, opts) {
           );
         }
         blocks.push(h("div", { key: `b${k++}`, style: S.codeWrap }, children));
+        continue;
+      }
+
+      // GFM table: a row of pipes followed by a |---|---| separator
+      if (line.includes("|") && i + 1 < lines.length && isSeparator(lines[i + 1])) {
+        const header = splitCells(line);
+        i += 2; // header + separator
+        const rows = [];
+        while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+          rows.push(splitCells(lines[i]));
+          i++;
+        }
+        blocks.push(renderTable(header, rows, `b${k++}`));
         continue;
       }
 
@@ -132,6 +177,23 @@ const S = {
     padding: "1px 4px",
     fontSize: "0.92em",
     color: "#e6b673",
+  },
+  tableWrap: { margin: "8px 0", overflowX: "auto", maxWidth: "100%" },
+  table: { borderCollapse: "collapse", fontSize: 11.5, width: "100%" },
+  th: {
+    border: "1px solid #2a2f3a",
+    padding: "3px 7px",
+    textAlign: "left",
+    background: "#161b24",
+    color: "#aebfe0",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  td: {
+    border: "1px solid #2a2f3a",
+    padding: "3px 7px",
+    color: "#c2c9d6",
+    verticalAlign: "top",
   },
   codeWrap: { position: "relative", margin: "6px 0" },
   codeBlock: {
