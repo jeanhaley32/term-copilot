@@ -14,6 +14,39 @@ const { makeRenderer } = require("./markdown.js");
 
 const PANEL_W = 380;
 
+// Captured from middleware — Hyper's Redux store, used to find the active
+// session and write into its pty.
+let hyperStore = null;
+
+// Write text into the ACTIVE terminal session's pty, wrapped in bracketed-paste
+// markers (ESC[200~ … ESC[201~) so multi-line snippets land at the prompt for
+// review instead of auto-executing. Uses the same rpc 'data' path keystrokes
+// take (window.rpc is exposed by Hyper).
+function writeToTerminal(text) {
+  try {
+    if (!hyperStore || !text) return;
+    const uid = hyperStore.getState().sessions.activeUid;
+    if (!uid) return;
+    const data = "\x1b[200~" + text + "\x1b[201~";
+    if (typeof window !== "undefined" && window.rpc) {
+      window.rpc.emit("data", { uid, data });
+    } else {
+      // Fallback: dispatch the user-data action with an rpc effect.
+      hyperStore.dispatch({
+        type: "SESSION_USER_DATA",
+        data,
+        effect() {
+          if (typeof window !== "undefined" && window.rpc) {
+            window.rpc.emit("data", { uid, data });
+          }
+        },
+      });
+    }
+  } catch {
+    /* never break the terminal */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 0. Reserve space for the panel. Hyper positions its terminal container
 //    (.terms_terms) absolutely filling the window, so a flexbox sibling won't
@@ -31,6 +64,7 @@ exports.decorateConfig = (config) => {
 // 1. Middleware — observe terminal output + cwd, forward to the bridge.
 // ---------------------------------------------------------------------------
 exports.middleware = (store) => (next) => (action) => {
+  hyperStore = store; // capture for writeToTerminal
   try {
     // Incoming pty output for a session.
     if (action.type === "SESSION_ADD_DATA" && action.data) {
@@ -53,7 +87,7 @@ exports.middleware = (store) => (next) => (action) => {
 // ---------------------------------------------------------------------------
 exports.decorateHyper = (Hyper, { React }) => {
   const h = React.createElement;
-  const renderMarkdown = makeRenderer(React);
+  const renderMarkdown = makeRenderer(React, { onInsertCode: writeToTerminal });
 
   class ChatPanel extends React.Component {
     constructor(props) {
@@ -66,6 +100,7 @@ exports.decorateHyper = (Hyper, { React }) => {
         rate: null, // latest rate_status.status
         watchOn: false,
         watchText: "", // latest watch_update note
+        intervalMs: 10000, // watch cadence
       };
       this.onSubmit = this.onSubmit.bind(this);
       this.onInput = this.onInput.bind(this);
@@ -73,6 +108,7 @@ exports.decorateHyper = (Hyper, { React }) => {
       this.onClear = this.onClear.bind(this);
       this.onHotkey = this.onHotkey.bind(this);
       this.onToggleWatch = this.onToggleWatch.bind(this);
+      this.onChangeInterval = this.onChangeInterval.bind(this);
     }
 
     componentDidMount() {
@@ -93,7 +129,9 @@ exports.decorateHyper = (Hyper, { React }) => {
         this.setState({ streaming: false });
       });
       this._bind("rate_status", (m) => this.setState({ rate: m.status }));
-      this._bind("watch_state", (m) => this.setState({ watchOn: !!m.on }));
+      this._bind("watch_state", (m) =>
+        this.setState({ watchOn: !!m.on, intervalMs: m.intervalMs || this.state.intervalMs }),
+      );
       this._bind("watch_update", (m) => this.setState({ watchText: m.text }));
     }
 
@@ -117,7 +155,14 @@ exports.decorateHyper = (Hyper, { React }) => {
     onToggleWatch() {
       const on = !this.state.watchOn;
       this.setState({ watchOn: on });
-      client.send({ type: "watch", on });
+      client.send({ type: "watch", on, intervalMs: this.state.intervalMs });
+    }
+
+    onChangeInterval(e) {
+      const intervalMs = parseInt(e.target.value, 10);
+      this.setState({ intervalMs });
+      // If watching, re-arm at the new cadence; otherwise just remember it.
+      if (this.state.watchOn) client.send({ type: "watch", on: true, intervalMs });
     }
 
     // Send a message programmatically (used by the hotkey and the input).
@@ -203,6 +248,17 @@ exports.decorateHyper = (Hyper, { React }) => {
           h("span", { key: "btns" }, [
             h("button", { key: "w", style: watchBtnStyle, onClick: this.onToggleWatch, title: "Watch mode: auto-summarize new activity" },
               this.state.watchOn ? "● watching" : "watch"),
+            h("select", {
+              key: "iv",
+              style: Object.assign({ marginLeft: 6 }, S.intervalSel),
+              value: String(this.state.intervalMs),
+              onChange: this.onChangeInterval,
+              title: "Watch interval",
+            }, [
+              h("option", { key: "10", value: "10000" }, "10s"),
+              h("option", { key: "30", value: "30000" }, "30s"),
+              h("option", { key: "60", value: "60000" }, "60s"),
+            ]),
             h("button", { key: "c", style: Object.assign({ marginLeft: 6 }, S.clearBtn), onClick: this.onClear, title: "Clear conversation" }, "clear"),
           ]),
         ]),
@@ -283,6 +339,15 @@ const STYLES = {
     letterSpacing: 0,
   },
   watchBtnOn: { color: "#7ee0a1", borderColor: "#2e6f4a", background: "#10261a" },
+  intervalSel: {
+    background: "#10131a",
+    color: "#7e8796",
+    border: "1px solid #2a2f3a",
+    borderRadius: 5,
+    fontSize: 10,
+    padding: "1px 4px",
+    cursor: "pointer",
+  },
   watchBanner: {
     margin: "0 12px 8px",
     padding: "6px 9px",

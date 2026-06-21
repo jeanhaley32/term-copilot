@@ -5,8 +5,9 @@
 // Everything else falls through as plain text. Good enough to make replies
 // readable without pulling in a markdown library.
 
-function makeRenderer(React) {
+function makeRenderer(React, opts) {
   const h = React.createElement;
+  const onInsertCode = (opts && opts.onInsertCode) || null;
 
   // --- inline: `code`, **bold**, *italic* ---------------------------------
   function inline(text, keyPrefix) {
@@ -50,7 +51,23 @@ function makeRenderer(React) {
         i++;
         while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
         i++; // closing fence
-        blocks.push(h("pre", { key: `b${k++}`, style: S.codeBlock }, buf.join("\n")));
+        const code = buf.join("\n");
+        const children = [h("pre", { key: "pre", style: S.codeBlock }, code)];
+        if (onInsertCode) {
+          children.push(
+            h(
+              "button",
+              {
+                key: "ins",
+                style: S.insertBtn,
+                title: "Insert into terminal (lands at the prompt; press Enter to run)",
+                onClick: () => onInsertCode(code),
+              },
+              "→ insert",
+            ),
+          );
+        }
+        blocks.push(h("div", { key: `b${k++}`, style: S.codeWrap }, children));
         continue;
       }
 
@@ -116,17 +133,31 @@ const S = {
     fontSize: "0.92em",
     color: "#e6b673",
   },
+  codeWrap: { position: "relative", margin: "6px 0" },
   codeBlock: {
     fontFamily: "Menlo, monospace",
     background: "#0b0e14",
     border: "1px solid #2a2f3a",
     borderRadius: 6,
     padding: 8,
-    margin: "6px 0",
+    margin: 0,
     overflowX: "auto",
     whiteSpace: "pre",
     fontSize: 12,
     color: "#cfe1c0",
+  },
+  insertBtn: {
+    position: "absolute",
+    top: 5,
+    right: 5,
+    background: "#1c2230",
+    color: "#8ab4f8",
+    border: "1px solid #2a2f3a",
+    borderRadius: 5,
+    fontSize: 10,
+    padding: "2px 7px",
+    cursor: "pointer",
+    opacity: 0.9,
   },
 };
 
