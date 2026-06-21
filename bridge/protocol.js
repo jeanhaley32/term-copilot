@@ -10,10 +10,12 @@
 //     { "type": "cwd",       "dir": "<terminal's current working directory>" }
 //     { "type": "chat_msg",  "text": "<user message>" }
 //   bridge -> client:
-//     { "type": "chat_stream", "text": "<partial assistant text>" }
+//     { "type": "chat_stream",  "text": "<partial assistant text>" }
 //     { "type": "chat_done" }
-//     { "type": "chat_error",  "error": "<message>" }
-//     { "type": "status",      "text": "<human-readable status>" }
+//     { "type": "chat_error",   "error": "<message>" }
+//     { "type": "rate_limited", "error", "retryAtMs", "rateLimitType" }
+//     { "type": "rate_status",  "status": { state, openUntil, rateLimitType, ... } }
+//     { "type": "status",       "text": "<human-readable status>" }
 
 export function encode(obj) {
   return JSON.stringify(obj) + "\n";

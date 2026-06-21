@@ -19,6 +19,7 @@ import path from "node:path";
 import { encode, createDecoder } from "./protocol.js";
 import { RollingBuffer } from "./buffer.js";
 import { ask } from "./claude.js";
+import { RateGuard, CircuitOpenError } from "./rateguard.js";
 
 const SOCK = process.env.TERM_COPILOT_SOCK || path.join(os.homedir(), ".term-copilot.sock");
 
@@ -29,6 +30,9 @@ const buffer = new RollingBuffer(16000);
 // The terminal's current working directory, reported by the client. CLAUDE.md /
 // rules resolve from here (see claude.js). Falls back to the bridge's cwd.
 let termCwd = process.cwd();
+
+// One breaker shared across clients — the rate limit is account-wide.
+const guard = new RateGuard();
 
 function log(...a) {
   console.log(`[bridge ${new Date().toISOString()}]`, ...a);
@@ -62,17 +66,34 @@ const server = net.createServer((sock) => {
       log(`chat_msg: ${JSON.stringify(text.slice(0, 80))}`);
       if (!text) return;
       try {
-        await ask({
-          terminalContext: buffer.tail(),
-          userMessage: text,
-          cwd: termCwd,
-          onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
-        });
+        await guard.run(() =>
+          ask({
+            terminalContext: buffer.tail(),
+            userMessage: text,
+            cwd: termCwd,
+            onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
+          }),
+        );
         send({ type: "chat_done" });
         log("chat_done");
       } catch (err) {
-        log("chat_error:", err.message);
-        send({ type: "chat_error", error: String(err.message || err) });
+        if (err instanceof CircuitOpenError) {
+          // Rate-limited: tell the client when to try again, don't treat as a
+          // hard error.
+          log("rate-limited:", err.message);
+          send({
+            type: "rate_limited",
+            error: err.message,
+            retryAtMs: err.retryAtMs,
+            rateLimitType: err.rateLimitType,
+          });
+        } else {
+          log("chat_error:", err.message);
+          send({ type: "chat_error", error: String(err.message || err) });
+        }
+      } finally {
+        // Always surface the latest breaker/limit telemetry to the panel.
+        send({ type: "rate_status", status: guard.status() });
       }
       return;
     }

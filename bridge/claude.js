@@ -8,6 +8,25 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+// Thrown when the subscription rate limit rejects the request. Carries the
+// bucket that tripped and when it resets, so the circuit breaker can wait the
+// authoritative amount of time instead of guessing.
+export class RateLimitError extends Error {
+  constructor({ rateLimitType, resetsAt, errorCode } = {}) {
+    super(`rate limited${rateLimitType ? ` (${rateLimitType})` : ""}`);
+    this.name = "RateLimitError";
+    this.rateLimitType = rateLimitType || null;
+    this.resetsAt = normalizeEpochMs(resetsAt); // ms, or null
+    this.errorCode = errorCode || null;
+  }
+}
+
+// SDK timestamps may be epoch seconds or ms; normalize to ms.
+function normalizeEpochMs(t) {
+  if (typeof t !== "number" || !isFinite(t)) return null;
+  return t < 1e12 ? t * 1000 : t;
+}
+
 const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
 
 const COPILOT_PROMPT = `You are a terminal copilot. The user is working in a shell and you sit in a
@@ -55,6 +74,9 @@ export async function ask({ terminalContext, userMessage, cwd, onChunk }) {
 
   let full = "";
   let sawDelta = false;
+  let rateInfo = null; // latest SDKRateLimitInfo seen
+  let usage = null; // token usage from the result
+  let rateLimits = null; // per-bucket utilization/resets from the result
 
   const q = query({
     prompt,
@@ -86,10 +108,26 @@ export async function ask({ terminalContext, userMessage, cwd, onChunk }) {
           onChunk?.(block.text);
         }
       }
-    } else if (msg.type === "result" && msg.subtype !== "success") {
-      throw new Error(`Claude returned: ${msg.subtype || "error"}`);
+    } else if (msg.type === "rate_limit_event") {
+      rateInfo = msg.rate_limit_info || rateInfo;
+    } else if (msg.type === "result") {
+      usage = msg.usage || usage;
+      rateLimits = msg.rate_limits || rateLimits;
+      if (msg.subtype !== "success") {
+        // If a rate limit caused this, throw the typed error so the breaker
+        // can react; otherwise surface a generic failure.
+        if (rateInfo?.status === "rejected" || rateInfo?.errorCode) {
+          throw new RateLimitError(rateInfo);
+        }
+        throw new Error(`Claude returned: ${msg.subtype || "error"}`);
+      }
     }
   }
 
-  return full;
+  // Even on success the SDK can signal a hard rejection via rate_limit_event.
+  if (rateInfo?.status === "rejected" || rateInfo?.errorCode) {
+    throw new RateLimitError(rateInfo);
+  }
+
+  return { text: full, usage, rateLimits, rateInfo };
 }
