@@ -1,0 +1,14 @@
+{
+  "name": "term-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A terminal copilot bridge: streams terminal output over a local socket and lets a local Claude Code instance respond in a chat side panel.",
+  "scripts": {
+    "bridge": "node bridge/index.js",
+    "demo": "node client/dummy.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.185"
+  }
+}
