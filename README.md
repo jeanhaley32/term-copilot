@@ -71,6 +71,21 @@ claude   # log in once if needed
 
 NDJSON over the socket (see `bridge/protocol.js`):
 
-- client → bridge: `term_data` · `cwd` · `chat_msg`
+- client → bridge: `term_data` · `cwd` · `chat_msg` · `clear` · `watch`
 - bridge → client: `chat_stream` · `chat_done` · `chat_error` · `rate_limited`
-  · `rate_status` · `status`
+  · `rate_status` · `watch_update` · `watch_state` · `status`
+
+## Watch mode (live updates)
+
+Toggle **watch** in the panel header to have the copilot auto-summarize new
+terminal activity. It's deliberately frugal so it doesn't drain your
+subscription:
+
+- **Change-gated:** a tick only spends a request if the terminal buffer changed
+  since the last tick — an idle terminal costs nothing.
+- **Circuit-aware:** if RateGuard is open, ticks skip silently.
+- **Floored interval:** minimum 15s (default 30s). Stateless prompt, not added
+  to the chat thread; notes appear in a banner.
+
+Even so, watch mode spends requests on a timer — leave it off for normal use and
+flip it on when you want a live read on a long-running task.

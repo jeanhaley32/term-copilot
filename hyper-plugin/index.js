@@ -64,12 +64,15 @@ exports.decorateHyper = (Hyper, { React }) => {
         streaming: false,
         connected: false,
         rate: null, // latest rate_status.status
+        watchOn: false,
+        watchText: "", // latest watch_update note
       };
       this.onSubmit = this.onSubmit.bind(this);
       this.onInput = this.onInput.bind(this);
       this.onKeyDown = this.onKeyDown.bind(this);
       this.onClear = this.onClear.bind(this);
       this.onHotkey = this.onHotkey.bind(this);
+      this.onToggleWatch = this.onToggleWatch.bind(this);
     }
 
     componentDidMount() {
@@ -90,6 +93,8 @@ exports.decorateHyper = (Hyper, { React }) => {
         this.setState({ streaming: false });
       });
       this._bind("rate_status", (m) => this.setState({ rate: m.status }));
+      this._bind("watch_state", (m) => this.setState({ watchOn: !!m.on }));
+      this._bind("watch_update", (m) => this.setState({ watchText: m.text }));
     }
 
     componentWillUnmount() {
@@ -107,6 +112,12 @@ exports.decorateHyper = (Hyper, { React }) => {
     onClear() {
       client.send({ type: "clear" });
       this.setState({ messages: [], streaming: false });
+    }
+
+    onToggleWatch() {
+      const on = !this.state.watchOn;
+      this.setState({ watchOn: on });
+      client.send({ type: "watch", on });
     }
 
     // Send a message programmatically (used by the hotkey and the input).
@@ -181,12 +192,24 @@ exports.decorateHyper = (Hyper, { React }) => {
               : "";
         return h("div", { key: i, style: S.botMsg }, body);
       });
+      const watchBtnStyle = Object.assign(
+        {},
+        S.clearBtn,
+        this.state.watchOn ? S.watchBtnOn : null,
+      );
       return h("div", { style: S.panel }, [
         h("div", { key: "hd", style: S.header }, [
           h("span", { key: "t" }, "◇ copilot"),
-          h("button", { key: "c", style: S.clearBtn, onClick: this.onClear, title: "Clear conversation" }, "clear"),
+          h("span", { key: "btns" }, [
+            h("button", { key: "w", style: watchBtnStyle, onClick: this.onToggleWatch, title: "Watch mode: auto-summarize new activity" },
+              this.state.watchOn ? "● watching" : "watch"),
+            h("button", { key: "c", style: Object.assign({ marginLeft: 6 }, S.clearBtn), onClick: this.onClear, title: "Clear conversation" }, "clear"),
+          ]),
         ]),
         h("div", { key: "st", style: S.status }, this._rateLabel() + "   ·   ⌘⇧L: look at screen"),
+        this.state.watchOn && this.state.watchText
+          ? h("div", { key: "wb", style: S.watchBanner }, "👁  " + this.state.watchText)
+          : null,
         h("div", { key: "ms", style: S.messages, ref: (el) => (this._msgEl = el) }, rows),
         h("div", { key: "in", style: S.inputRow }, [
           h("textarea", {
@@ -258,6 +281,17 @@ const STYLES = {
     padding: "2px 8px",
     cursor: "pointer",
     letterSpacing: 0,
+  },
+  watchBtnOn: { color: "#7ee0a1", borderColor: "#2e6f4a", background: "#10261a" },
+  watchBanner: {
+    margin: "0 12px 8px",
+    padding: "6px 9px",
+    background: "#12241c",
+    border: "1px solid #234a35",
+    borderRadius: 6,
+    color: "#bfe9cd",
+    fontSize: 11.5,
+    whiteSpace: "pre-wrap",
   },
   status: { padding: "0 12px 8px", fontSize: 11, color: "#7e8796" },
   messages: { flex: 1, overflowY: "auto", padding: "4px 12px", lineHeight: 1.5 },

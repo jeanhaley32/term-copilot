@@ -39,6 +39,73 @@ const guard = new RateGuard();
 let history = [];
 const MAX_HISTORY_TURNS = 24; // 12 exchanges
 
+// ---- watch mode --------------------------------------------------------
+// Periodically summarize NEW terminal activity — but only when the buffer
+// actually changed and the circuit is closed, so an idle terminal costs zero
+// requests. Off by default; toggled by the client.
+const WATCH_MIN_MS = 15000;
+const WATCH_DEFAULT_MS = 30000;
+const watch = { on: false, intervalMs: WATCH_DEFAULT_MS, timer: null, lastSig: null };
+const sockets = new Set(); // connected clients' send fns, for broadcast
+
+function bufferSignature() {
+  const t = buffer.text;
+  return t.length + ":" + t.slice(-80);
+}
+
+function broadcast(obj) {
+  for (const send of sockets) {
+    try {
+      send(obj);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+const WATCH_PROMPT =
+  "Watch mode: in ONE short sentence, note anything noteworthy in the latest " +
+  "terminal activity (a new error, a finished build, a risky command). If " +
+  "nothing stands out, reply with exactly: (nothing).";
+
+let watchBusy = false;
+async function watchTick() {
+  if (!watch.on || watchBusy) return;
+  const sig = bufferSignature();
+  if (sig === watch.lastSig) return; // nothing changed since last tick
+  watch.lastSig = sig;
+  watchBusy = true;
+  try {
+    let text = "";
+    await guard.run(() =>
+      ask({
+        terminalContext: buffer.tail(),
+        userMessage: WATCH_PROMPT,
+        cwd: termCwd,
+        history: [], // watch ticks are stateless
+        onChunk: (c) => (text += c),
+      }),
+    );
+    const trimmed = text.trim();
+    if (trimmed && !/^\(?\s*nothing\s*\)?\.?$/i.test(trimmed)) {
+      broadcast({ type: "watch_update", text: trimmed });
+    }
+  } catch {
+    // CircuitOpenError or transient — skip this tick silently.
+  } finally {
+    watchBusy = false;
+  }
+}
+
+function armWatch() {
+  if (watch.timer) clearInterval(watch.timer);
+  watch.timer = null;
+  if (watch.on) {
+    watch.lastSig = null; // force a first look
+    watch.timer = setInterval(watchTick, watch.intervalMs);
+  }
+}
+
 function log(...a) {
   console.log(`[bridge ${new Date().toISOString()}]`, ...a);
 }
@@ -53,6 +120,7 @@ try {
 const server = net.createServer((sock) => {
   log("client connected");
   const send = (obj) => sock.write(encode(obj));
+  sockets.add(send); // for watch-mode broadcasts
 
   const decode = createDecoder(async (msg) => {
     if (msg.type === "term_data") {
@@ -69,6 +137,16 @@ const server = net.createServer((sock) => {
     if (msg.type === "clear") {
       history = [];
       log("history cleared");
+      return;
+    }
+    if (msg.type === "watch") {
+      watch.on = !!msg.on;
+      if (msg.intervalMs) {
+        watch.intervalMs = Math.max(WATCH_MIN_MS, msg.intervalMs);
+      }
+      log(`watch ${watch.on ? "on" : "off"} (${watch.intervalMs}ms)`);
+      armWatch();
+      broadcast({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
       return;
     }
     if (msg.type === "chat_msg") {
@@ -121,9 +199,13 @@ const server = net.createServer((sock) => {
 
   sock.on("data", decode);
   sock.on("error", (e) => log("socket error:", e.message));
-  sock.on("close", () => log("client disconnected"));
+  sock.on("close", () => {
+    sockets.delete(send);
+    log("client disconnected");
+  });
 
   send({ type: "status", text: "connected to term-copilot bridge" });
+  send({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
 });
 
 server.listen(SOCK, () => {

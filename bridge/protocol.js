@@ -10,12 +10,15 @@
 //     { "type": "cwd",       "dir": "<terminal's current working directory>" }
 //     { "type": "chat_msg",  "text": "<user message>" }
 //     { "type": "clear" }    reset conversation history
+//     { "type": "watch",     "on": bool, "intervalMs"? } toggle watch mode
 //   bridge -> client:
 //     { "type": "chat_stream",  "text": "<partial assistant text>" }
 //     { "type": "chat_done" }
 //     { "type": "chat_error",   "error": "<message>" }
 //     { "type": "rate_limited", "error", "retryAtMs", "rateLimitType" }
 //     { "type": "rate_status",  "status": { state, openUntil, rateLimitType, ... } }
+//     { "type": "watch_update", "text": "<note about new terminal activity>" }
+//     { "type": "watch_state",  "on": bool, "intervalMs" }
 //     { "type": "status",       "text": "<human-readable status>" }
 
 export function encode(obj) {
