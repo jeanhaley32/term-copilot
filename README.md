@@ -21,26 +21,16 @@ Code instance** watches what you're doing in the shell and responds — on your
 ## Quick start
 
 ```bash
-# 1. clone + install
 git clone https://github.com/jeanhaley32/term-copilot.git ~/term-copilot
-cd ~/term-copilot && npm install
-
-# 2. link the Hyper plugin
-mkdir -p ~/.hyper_plugins/local
-ln -s ~/term-copilot/hyper-plugin ~/.hyper_plugins/local/hyper-term-copilot
-#    then add  localPlugins: ["hyper-term-copilot"]  to ~/.hyper.js
-
-# 3. make sure Claude Code is logged in (subscription, no API key)
-claude          # /login if needed,  /status to check
-echo $ANTHROPIC_API_KEY   # should print nothing
-
-# 4. run
-npm run bridge  # keep this running
-open -a Hyper   # copilot panel appears on the right
+cd ~/term-copilot
+./setup.sh          # installs deps, Hyper, links + enables the plugin
+claude              # /login if needed (subscription, no API key)
+./start.sh          # opens Hyper + runs the bridge — panel is on the right
 ```
 
-See [Install](#install-one-time), [Run](#run), and [Troubleshooting](#troubleshooting)
-below for detail.
+`./setup.sh` is idempotent (safe to re-run). See [Manual install](#manual-install)
+if you'd rather do the steps yourself, and [Troubleshooting](#troubleshooting) if
+anything's off.
 
 ## Features
 
@@ -107,7 +97,9 @@ Design details:
   Pro/Max subscription** (`claude` → `/login`)
 - `ANTHROPIC_API_KEY` **unset** (otherwise the SDK bills the API)
 
-## Install (one-time)
+## Manual install
+
+`./setup.sh` does all of this for you; here are the steps if you prefer manual:
 
 ```bash
 git clone https://github.com/jeanhaley32/term-copilot.git ~/term-copilot
@@ -118,7 +110,7 @@ mkdir -p ~/.hyper_plugins/local
 ln -s ~/term-copilot/hyper-plugin ~/.hyper_plugins/local/hyper-term-copilot
 ```
 
-Then add the plugin to `~/.hyper.js`:
+Then add the plugin to `~/.hyper.js` and restart Hyper:
 
 ```js
 localPlugins: ["hyper-term-copilot"],
@@ -128,6 +120,12 @@ localPlugins: ["hyper-term-copilot"],
 
 ```bash
 cd ~/term-copilot
+./start.sh          # opens Hyper + runs the bridge (Ctrl-C to stop)
+```
+
+Or run the pieces yourself:
+
+```bash
 npm run bridge      # start the bridge — keep this running
 open -a Hyper       # the copilot panel appears on the right
 ```
@@ -160,11 +158,15 @@ warning on startup if `ANTHROPIC_API_KEY` is set, since that would bill the API.
 
 - **Ask** — type in the box, Enter to send (Shift+Enter for a newline).
 - **⌘⇧L** — "look at this": ask about whatever's on screen right now.
-- **→ insert** — on a code block, drops the snippet at your shell prompt.
+- **→ insert** — on a code block, drops the snippet at your shell prompt
+  (bracketed-paste, so it doesn't auto-run — review and press Enter).
+- **`/` slash commands** — in **session** mode, type `/` for a popup of Claude
+  Code's commands (see below).
 - **session** — toggle the running context window (see below); a meter shows fill.
 - **tools** — toggle the workspace harness (see below).
 - **watch** — toggle live updates; the dropdown sets the cadence (10s/30s/60s).
 - **clear** — reset the conversation.
+- **Resize** — drag the panel's left edge (width is remembered).
 
 ### Session mode (running context window)
 
@@ -181,17 +183,29 @@ Best for long, building conversations (debugging a thread, a learning session).
 It re-sends accumulated context each turn, so it costs more than stateless
 Q&A — leave it off for quick one-offs.
 
+### Slash commands
+
+In **session** mode, type `/` to open a popup of the slash commands your Claude
+Code has — built-ins (`/compact`, `/context`, `/clear`, `/usage`) **plus your own**
+(`~/.claude/commands/*.md`, skills, plugins). ↑/↓ to select, Enter/Tab to pick,
+Esc to dismiss. The picked command runs in the live session. (The full list loads
+after your first message; a common subset is shown immediately.)
+
 ### Workspace tools
 
-Toggle **tools** to let Claude actually act in your terminal's directory, not
-just observe it:
+Toggle **tools** to let Claude act in your terminal's directory, not just
+observe it. It's a thin layer over your real Claude Code environment:
 
-- **Read-only** (`Read`, `Grep`, `Glob`, `LS`) — auto-allowed, no prompts.
-- **Mutating** (`Bash`, `Edit`, `Write`) — each action prompts in the panel with
-  **Allow once / Allow for session / Deny**. "Allow for session" whitelists that
-  specific action (e.g. the exact command) so it won't re-ask.
-- Tool activity is shown inline (`🔧 Bash · npm test`) as Claude works.
+- **Read-only** (`Read`, `Grep`, `Glob`, `LS`, `read_terminal`) — auto-allowed.
+- **Everything else** — built-in `Bash`/`Edit`/`Write` **and any custom MCP tool,
+  skill, or subagent you've configured for Claude Code** — prompts in the panel
+  with **Allow once / Allow for session / Deny**. "Allow for session" whitelists
+  that specific action (e.g. the exact command) so it won't re-ask.
+- Tool activity shows inline (`🔧 Bash · npm test`) as Claude works.
 - Toggling tools off clears the session allow-list.
+
+`read_terminal` lets Claude page into a large scrollback on demand, so we inject
+only a small terminal slice into prompts.
 
 ### Watch mode
 
@@ -210,17 +224,22 @@ normal use and flip it on for a long-running task you want watched.
 NDJSON over the socket (see `bridge/protocol.js`):
 
 - client → bridge: `term_data` · `cwd` · `chat_msg` · `clear` · `watch` ·
-  `tools` · `permission_response`
+  `tools` · `session` · `permission_response`
 - bridge → client: `chat_stream` · `chat_done` · `chat_error` · `rate_limited` ·
   `rate_status` · `watch_update` · `watch_state` · `tool_use` ·
-  `permission_request` · `tools_state` · `status`
+  `permission_request` · `tools_state` · `session_state` · `context` ·
+  `slash_commands` · `status`
 
 ## Project layout
 
 ```
-bridge/        socket server, rolling buffer, RateGuard, Claude (Agent SDK)
+setup.sh       automated installer (deps, Hyper, plugin link + enable)
+start.sh       launcher: opens Hyper + runs the bridge
+bridge/        index.js (socket server) · session.js (live streaming session) ·
+               buffer.js · rateguard.js · claude.js (Agent SDK) · protocol.js
 client/        dummy.js — headless test client
-hyper-plugin/  Hyper plugin: output/cwd tap, chat panel, code insert, markdown
+hyper-plugin/  Hyper plugin: output/cwd tap, chat panel, markdown, code insert,
+               context meter, slash popup, resize
 ```
 
 ## Configuration
