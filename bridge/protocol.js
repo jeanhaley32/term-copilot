@@ -27,6 +27,8 @@
 //     { "type": "permission_request", "id", "name", "detail", "signature" }
 //     { "type": "tools_state",  "on": bool }
 //     { "type": "session_state","on": bool }
+//     { "type": "sessions",     "list": [{ name, sessionId, cwd, savedAt }] }
+//     { "type": "transcript",   "name", "messages": [{ role, text }] }  (on resume)
 //     { "type": "context",      "tokens", "max", "percentage", "session" }
 //     { "type": "status",       "text": "<human-readable status>" }
 

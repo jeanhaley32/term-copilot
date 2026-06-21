@@ -231,6 +231,60 @@ function saveSessions(list) {
 }
 let savedSessions = loadSessions();
 
+// Read Claude Code's on-disk transcript for a session id so the panel can
+// repaint the prior conversation on resume. Returns [{role, text}].
+function readTranscript(sessionId) {
+  const base = path.join(os.homedir(), ".claude", "projects");
+  let file = null;
+  try {
+    for (const dir of fs.readdirSync(base)) {
+      const p = path.join(base, dir, sessionId + ".jsonl");
+      if (fs.existsSync(p)) { file = p; break; }
+    }
+  } catch {
+    return [];
+  }
+  if (!file) return [];
+  const out = [];
+  // Our injected user turns wrap the real text as "…\n\nUser: <text>"; unwrap it.
+  const unwrap = (t) => {
+    const i = t.lastIndexOf("\nUser: ");
+    return i !== -1 ? t.slice(i + 7) : t;
+  };
+  let lines;
+  try {
+    lines = fs.readFileSync(file, "utf8").split("\n");
+  } catch {
+    return [];
+  }
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (rec.type === "user" && rec.message) {
+      const c = rec.message.content;
+      let text =
+        typeof c === "string"
+          ? c
+          : Array.isArray(c)
+            ? c.filter((b) => b.type === "text").map((b) => b.text).join("")
+            : "";
+      text = unwrap(text).trim();
+      if (text) out.push({ role: "user", text });
+    } else if (rec.type === "assistant" && rec.message) {
+      for (const b of rec.message.content || []) {
+        if (b.type === "text" && b.text.trim()) out.push({ role: "assistant", text: b.text });
+        else if (b.type === "tool_use") out.push({ role: "tool", text: b.name });
+      }
+    }
+  }
+  return out.slice(-200); // cap the repaint
+}
+
 // ---- watch mode --------------------------------------------------------
 // Periodically summarize NEW terminal activity — but only when the buffer
 // actually changed and the circuit is closed, so an idle terminal costs zero
@@ -378,9 +432,11 @@ const server = net.createServer((sock) => {
       session.on = true;
       startLiveSession(msg.sessionId);
       const saved = savedSessions.find((s) => s.sessionId === msg.sessionId);
-      log(`session resumed: ${saved ? saved.name : msg.sessionId}`);
+      const name = saved ? saved.name : "session";
+      log(`session resumed: ${name}`);
       broadcast({ type: "session_state", on: true });
-      broadcast({ type: "session_resumed", name: saved ? saved.name : "session" });
+      // Repaint the prior conversation from the on-disk transcript.
+      broadcast({ type: "transcript", name, messages: readTranscript(msg.sessionId) });
       return;
     }
     if (msg.type === "tools") {

@@ -178,8 +178,9 @@ id (in `~/.term-copilot/sessions.json`); recalling uses the SDK's `resume`, so
 the model picks up the prior conversation's full memory. Click a saved name to
 resume it, `×` to delete. (Saving again with a new name renames it.)
 
-Recall restores the *model's* memory of the conversation; the visible panel
-starts fresh with a "↩ resumed" note.
+Recall restores both the *model's* memory (via `resume`) **and the visible
+panel** — it repaints the prior conversation by reading Claude Code's on-disk
+transcript, ending with a "↩ resumed" note.
 
 ### Session mode (running context window)
 

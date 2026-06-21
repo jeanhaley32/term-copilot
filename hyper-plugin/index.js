@@ -198,9 +198,11 @@ exports.decorateHyper = (Hyper, { React }) => {
         if (Array.isArray(m.commands) && m.commands.length) this.setState({ slashCommands: m.commands });
       });
       this._bind("sessions", (m) => this.setState({ sessions: m.list || [] }));
-      this._bind("session_resumed", (m) =>
+      this._bind("transcript", (m) =>
         this.setState({
-          messages: [{ role: "note", text: "↩ resumed: " + (m.name || "session") }],
+          messages: (m.messages || []).concat([
+            { role: "note", text: "↩ resumed: " + (m.name || "session") },
+          ]),
           showSessions: false,
         }),
       );
