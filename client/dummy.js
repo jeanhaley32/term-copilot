@@ -32,6 +32,10 @@ Found 1 error in src/server/clients/documents.ts:89
 $ `;
 
 const sock = net.createConnection(SOCK, () => {
+  // Optionally report a terminal cwd (so CLAUDE.md resolves from there).
+  if (process.env.TC_CWD) {
+    sock.write(encode({ type: "cwd", dir: process.env.TC_CWD }));
+  }
   // Stream the fake terminal output first...
   sock.write(encode({ type: "term_data", data: FAKE_TERMINAL }));
   // ...then ask the question.

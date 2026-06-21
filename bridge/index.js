@@ -26,6 +26,10 @@ const SOCK = process.env.TERM_COPILOT_SOCK || path.join(os.homedir(), ".term-cop
 // now; M3 can key buffers per session id).
 const buffer = new RollingBuffer(16000);
 
+// The terminal's current working directory, reported by the client. CLAUDE.md /
+// rules resolve from here (see claude.js). Falls back to the bridge's cwd.
+let termCwd = process.cwd();
+
 function log(...a) {
   console.log(`[bridge ${new Date().toISOString()}]`, ...a);
 }
@@ -46,6 +50,13 @@ const server = net.createServer((sock) => {
       buffer.append(msg.data || "");
       return;
     }
+    if (msg.type === "cwd") {
+      if (msg.dir) {
+        termCwd = msg.dir;
+        log(`cwd -> ${termCwd}`);
+      }
+      return;
+    }
     if (msg.type === "chat_msg") {
       const text = (msg.text || "").trim();
       log(`chat_msg: ${JSON.stringify(text.slice(0, 80))}`);
@@ -54,6 +65,7 @@ const server = net.createServer((sock) => {
         await ask({
           terminalContext: buffer.tail(),
           userMessage: text,
+          cwd: termCwd,
           onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
         });
         send({ type: "chat_done" });

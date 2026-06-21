@@ -27,12 +27,30 @@ if (process.env.ANTHROPIC_API_KEY) {
   );
 }
 
+// Cap on how much terminal output we inject, in characters. The terminal
+// buffer is the most disposable context layer, so we trim it first to leave
+// headroom for CLAUDE.md / rules / auto-memory that the SDK loads on top.
+const MAX_TERMINAL_CHARS = 12000;
+
 // Ask Claude about the given terminal context + user message.
+//
+// `cwd` is the TERMINAL's current working directory (reported by the client),
+// NOT the bridge's. The SDK resolves CLAUDE.md / .claude/rules by walking up
+// from this directory, so the copilot sees the same project memory Claude Code
+// would in that directory. With settingSources omitted the SDK already loads
+// ["user","project","local"]; we set it explicitly to make the intent obvious.
+//
 // `onChunk(text)` is called with incremental text as it streams.
 // Resolves with the full reply text.
-export async function ask({ terminalContext, userMessage, onChunk }) {
+export async function ask({ terminalContext, userMessage, cwd, onChunk }) {
+  // Trim the terminal buffer to its tail so a large CLAUDE.md still fits.
+  let term = terminalContext || "";
+  if (term.length > MAX_TERMINAL_CHARS) {
+    term = "…(truncated)…\n" + term.slice(term.length - MAX_TERMINAL_CHARS);
+  }
+
   const prompt =
-    `<recent_terminal_output>\n${terminalContext || "(empty)"}\n</recent_terminal_output>\n\n` +
+    `<recent_terminal_output>\n${term || "(empty)"}\n</recent_terminal_output>\n\n` +
     `User: ${userMessage}`;
 
   let full = "";
@@ -46,6 +64,9 @@ export async function ask({ terminalContext, userMessage, onChunk }) {
       maxTurns: 1,
       includePartialMessages: true,
       pathToClaudeCodeExecutable: CLAUDE_BIN,
+      // Resolve project memory from the terminal's directory, not ours.
+      cwd: cwd || process.cwd(),
+      settingSources: ["user", "project", "local"],
     },
   });
 

@@ -7,6 +7,7 @@
 // Message types
 //   client -> bridge:
 //     { "type": "term_data", "data": "<raw terminal output chunk>" }
+//     { "type": "cwd",       "dir": "<terminal's current working directory>" }
 //     { "type": "chat_msg",  "text": "<user message>" }
 //   bridge -> client:
 //     { "type": "chat_stream", "text": "<partial assistant text>" }
