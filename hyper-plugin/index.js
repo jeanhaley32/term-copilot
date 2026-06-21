@@ -121,6 +121,8 @@ exports.decorateHyper = (Hyper, { React }) => {
         sessionOn: false,
         ctx: null, // { tokens, max, percentage, categories }
         slashCommands: [],
+        slashSel: 0, // highlighted index in the slash popup
+        slashHidden: false, // dismissed with Esc until next keystroke
       };
       this.onToggleSession = this.onToggleSession.bind(this);
       this.onDragStart = this.onDragStart.bind(this);
@@ -240,15 +242,15 @@ exports.decorateHyper = (Hyper, { React }) => {
 
     // Slash commands matching what's typed (session mode only).
     _slashMatches() {
-      if (!this.state.sessionOn) return [];
+      if (!this.state.sessionOn || this.state.slashHidden) return [];
       const v = this.state.input;
-      if (!v.startsWith("/")) return [];
+      if (!v.startsWith("/") || /\s/.test(v)) return []; // only while typing the name
       const q = v.slice(1).toLowerCase();
-      return this.state.slashCommands.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 8);
+      return this.state.slashCommands.filter((c) => c.toLowerCase().includes(q)).slice(0, 10);
     }
 
     _pickSlash(cmd) {
-      this.setState({ input: "/" + cmd + " " });
+      this.setState({ input: "/" + cmd + " ", slashSel: 0 });
       if (this._taEl) this._taEl.focus();
     }
 
@@ -309,10 +311,34 @@ exports.decorateHyper = (Hyper, { React }) => {
     }
 
     onInput(e) {
-      this.setState({ input: e.target.value });
+      this.setState({ input: e.target.value, slashSel: 0, slashHidden: false });
     }
 
     onKeyDown(e) {
+      const matches = this._slashMatches();
+      // Slash popup is open → arrow keys navigate, Enter/Tab pick, Esc dismiss.
+      if (matches.length) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          this.setState((s) => ({ slashSel: Math.min(s.slashSel + 1, matches.length - 1) }));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          this.setState((s) => ({ slashSel: Math.max(s.slashSel - 1, 0) }));
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          this._pickSlash(matches[Math.min(this.state.slashSel, matches.length - 1)]);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this.setState({ slashHidden: true });
+          return;
+        }
+      }
       // Enter sends; Shift+Enter newline.
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -354,6 +380,24 @@ exports.decorateHyper = (Hyper, { React }) => {
           `context ${ctx.percentage}% · ${fmt(ctx.tokens)} / ${maxLbl}${ctx.percentage >= 80 ? "  ⚠ compaction near" : ""}`),
         h("div", { key: "bar", style: STYLES.ctxBar }, segs),
         legend ? h("div", { key: "leg", style: STYLES.ctxLegend }, legend) : null,
+      ]);
+    }
+
+    _renderSlashMenu() {
+      const h = React.createElement;
+      const matches = this._slashMatches();
+      if (!matches.length) return null;
+      const sel = Math.min(this.state.slashSel, matches.length - 1);
+      return h("div", { key: "slash", style: STYLES.slashMenu }, [
+        h("div", { key: "hdr", style: STYLES.slashHdr }, "↑↓ select · ⏎ run · esc dismiss"),
+        ...matches.map((c, i) =>
+          h("div", {
+            key: c,
+            style: Object.assign({}, STYLES.slashItem, i === sel ? STYLES.slashItemSel : null),
+            onMouseEnter: () => this.setState({ slashSel: i }),
+            onClick: () => this._pickSlash(c),
+          }, "/" + c),
+        ),
       ]);
     }
 
@@ -448,13 +492,7 @@ exports.decorateHyper = (Hyper, { React }) => {
               ]),
             ])
           : null,
-        this._slashMatches().length
-          ? h("div", { key: "slash", style: S.slashWrap },
-              this._slashMatches().map((c) =>
-                h("button", { key: c, style: S.slashChip, onClick: () => this._pickSlash(c) }, "/" + c),
-              ),
-            )
-          : null,
+        this._renderSlashMenu(),
         h("div", { key: "in", style: S.inputRow }, [
           h("textarea", {
             key: "ta",
@@ -542,17 +580,29 @@ const STYLES = {
   ctxLabel: { fontSize: 10, color: "#7e8796", marginBottom: 3 },
   ctxBar: { height: 5, display: "flex", background: "#1c2230", borderRadius: 3, overflow: "hidden" },
   ctxLegend: { fontSize: 9.5, color: "#5f6878", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-  slashWrap: { padding: "0 8px 6px", display: "flex", flexWrap: "wrap", gap: 4 },
-  slashChip: {
-    background: "#10131a",
-    color: "#8ab4f8",
+  slashMenu: {
+    margin: "0 8px 6px",
+    background: "#0b0e14",
     border: "1px solid #2a2f3a",
-    borderRadius: 5,
-    fontSize: 10.5,
-    padding: "2px 7px",
+    borderRadius: 6,
+    maxHeight: 220,
+    overflowY: "auto",
+    boxShadow: "0 -4px 16px rgba(0,0,0,0.4)",
+  },
+  slashHdr: {
+    padding: "5px 10px",
+    fontSize: 9.5,
+    color: "#5f6878",
+    borderBottom: "1px solid #1c2230",
+  },
+  slashItem: {
+    padding: "5px 10px",
+    fontSize: 12,
+    color: "#cdd3de",
     cursor: "pointer",
     fontFamily: "Menlo, monospace",
   },
+  slashItemSel: { background: "#1c2940", color: "#8ab4f8" },
   permCard: {
     margin: "0 12px 8px",
     padding: "8px 10px",
