@@ -131,15 +131,18 @@ function buildSessionOptions() {
     pathToClaudeCodeExecutable: CLAUDE_BIN,
     cwd: termCwd || process.cwd(),
     settingSources: ["user", "project", "local"],
-    // read_terminal is always available in a session (read-only); workspace
-    // tools are added only when the tools toggle is on.
-    allowedTools: [TERMINAL_TOOL, ...(tools.on ? TOOLSET : [])],
     maxTurns: tools.on ? 16 : 4, // a few turns so it can page the terminal then answer
     mcpServers: { terminal: terminalServer },
   };
   if (tools.on) {
+    // Full harness: allow ALL discovered tools (built-in, skills, and any custom
+    // MCP tools you've configured for Claude Code), gated by the approval flow —
+    // read-only auto-allowed, everything else prompts (with session allow-list).
     opts.permissionMode = "default";
     opts.canUseTool = makeCanUseTool();
+  } else {
+    // Tools off: the model may still page the terminal (read-only), nothing else.
+    opts.allowedTools = [TERMINAL_TOOL];
   }
   return opts;
 }
