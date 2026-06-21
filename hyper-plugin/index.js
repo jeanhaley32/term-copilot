@@ -17,6 +17,12 @@ const PANEL_MIN = 260;
 const PANEL_MAX = 900;
 const WIDTH_KEY = "termCopilotWidth";
 const PALETTE = ["#5aa9e6", "#e6b673", "#7ee0a1", "#c08af0", "#e08a8a", "#6fd0d0"];
+// Shown immediately when session turns on; replaced by the live list from the
+// SDK once the first message fires its init (which carries the real commands).
+const DEFAULT_SLASH = [
+  "compact", "context", "clear", "usage", "config", "review",
+  "security-review", "init", "insights",
+];
 
 function savedWidth() {
   try {
@@ -120,7 +126,7 @@ exports.decorateHyper = (Hyper, { React }) => {
         width: savedWidth(),
         sessionOn: false,
         ctx: null, // { tokens, max, percentage, categories }
-        slashCommands: [],
+        slashCommands: DEFAULT_SLASH, // seeded; replaced by the live list on init
         slashSel: 0, // highlighted index in the slash popup
         slashHidden: false, // dismissed with Esc until next keystroke
       };
@@ -179,7 +185,9 @@ exports.decorateHyper = (Hyper, { React }) => {
       this._bind("permission_request", (m) => this.setState({ perm: m }));
       this._bind("session_state", (m) => this.setState({ sessionOn: !!m.on }));
       this._bind("context", (m) => this.setState({ ctx: m }));
-      this._bind("slash_commands", (m) => this.setState({ slashCommands: m.commands || [] }));
+      this._bind("slash_commands", (m) => {
+        if (Array.isArray(m.commands) && m.commands.length) this.setState({ slashCommands: m.commands });
+      });
     }
 
     componentWillUnmount() {
