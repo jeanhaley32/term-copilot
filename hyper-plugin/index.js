@@ -12,7 +12,20 @@
 const client = require("./client.js");
 const { makeRenderer } = require("./markdown.js");
 
-const PANEL_W = 380;
+const PANEL_W = 380; // default width
+const PANEL_MIN = 260;
+const PANEL_MAX = 900;
+const WIDTH_KEY = "termCopilotWidth";
+
+function savedWidth() {
+  try {
+    const w = parseInt(window.localStorage.getItem(WIDTH_KEY), 10);
+    if (w >= PANEL_MIN && w <= PANEL_MAX) return w;
+  } catch {
+    /* ignore */
+  }
+  return PANEL_W;
+}
 
 // Captured from middleware — Hyper's Redux store, used to find the active
 // session and write into its pty.
@@ -103,7 +116,11 @@ exports.decorateHyper = (Hyper, { React }) => {
         intervalMs: 10000, // watch cadence
         toolsOn: false,
         perm: null, // pending permission request { id, name, detail, signature }
+        width: savedWidth(),
       };
+      this.onDragStart = this.onDragStart.bind(this);
+      this._onDrag = this._onDrag.bind(this);
+      this._endDrag = this._endDrag.bind(this);
       this.onSubmit = this.onSubmit.bind(this);
       this.onInput = this.onInput.bind(this);
       this.onKeyDown = this.onKeyDown.bind(this);
@@ -120,6 +137,13 @@ exports.decorateHyper = (Hyper, { React }) => {
       // "Look at this" — Cmd+Shift+L focuses the panel and asks about the
       // current screen using the buffer the bridge already has.
       window.addEventListener("keydown", this.onHotkey, true);
+      // Inset the terminal by the (resizable) panel width via an injected style
+      // tag we update live while dragging — overrides the static decorateConfig
+      // rule because it's inserted later.
+      this._styleEl = document.createElement("style");
+      this._styleEl.id = "term-copilot-inset";
+      document.head.appendChild(this._styleEl);
+      this._applyWidth(this.state.width);
       this._bind("connected", () => this.setState({ connected: true }));
       this._bind("disconnected", () => this.setState({ connected: false }));
       this._bind("chat_stream", (m) => this._appendToAssistant(m.text));
@@ -151,6 +175,41 @@ exports.decorateHyper = (Hyper, { React }) => {
     componentWillUnmount() {
       (this._handlers || []).forEach(([ev, fn]) => client.removeListener(ev, fn));
       window.removeEventListener("keydown", this.onHotkey, true);
+      this._endDrag();
+      if (this._styleEl && this._styleEl.parentNode) this._styleEl.parentNode.removeChild(this._styleEl);
+    }
+
+    // Push the current width to the injected stylesheet + persist it.
+    _applyWidth(w) {
+      if (this._styleEl) this._styleEl.textContent = `.terms_terms{right:${w}px !important;}`;
+      try {
+        window.localStorage.setItem(WIDTH_KEY, String(w));
+      } catch {
+        /* ignore */
+      }
+    }
+
+    onDragStart(e) {
+      e.preventDefault();
+      window.addEventListener("mousemove", this._onDrag, true);
+      window.addEventListener("mouseup", this._endDrag, true);
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+    }
+
+    _onDrag(e) {
+      let w = window.innerWidth - e.clientX;
+      const max = Math.min(PANEL_MAX, window.innerWidth - 200);
+      w = Math.max(PANEL_MIN, Math.min(max, w));
+      this.setState({ width: w });
+      this._applyWidth(w);
+    }
+
+    _endDrag() {
+      window.removeEventListener("mousemove", this._onDrag, true);
+      window.removeEventListener("mouseup", this._endDrag, true);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
     }
 
     onHotkey(e) {
@@ -276,7 +335,13 @@ exports.decorateHyper = (Hyper, { React }) => {
         S.clearBtn,
         this.state.toolsOn ? S.toolsBtnOn : null,
       );
-      return h("div", { style: S.panel }, [
+      return h("div", { style: Object.assign({}, S.panel, { width: this.state.width }) }, [
+        h("div", {
+          key: "drag",
+          style: S.dragHandle,
+          onMouseDown: this.onDragStart,
+          title: "Drag to resize",
+        }),
         h("div", { key: "hd", style: S.header }, [
           h("span", { key: "t" }, "◇ copilot"),
           h("span", { key: "btns" }, [
@@ -365,6 +430,15 @@ const STYLES = {
     color: "#cdd3de",
     fontFamily: "-apple-system, Menlo, monospace",
     fontSize: 12.5,
+  },
+  dragHandle: {
+    position: "absolute",
+    left: -3,
+    top: 0,
+    bottom: 0,
+    width: 6,
+    cursor: "col-resize",
+    zIndex: 200,
   },
   header: {
     padding: "10px 12px",
