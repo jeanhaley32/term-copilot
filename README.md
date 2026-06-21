@@ -84,8 +84,11 @@ subscription:
 - **Change-gated:** a tick only spends a request if the terminal buffer changed
   since the last tick — an idle terminal costs nothing.
 - **Circuit-aware:** if RateGuard is open, ticks skip silently.
-- **Floored interval:** minimum 15s (default 30s). Stateless prompt, not added
+- **Floored interval:** minimum 10s (default 10s). Stateless prompt, not added
   to the chat thread; notes appear in a banner.
+- **Harness context:** each call (chat or watch) is prefixed with a small block
+  telling Claude what it is, that it sees a rolling snapshot, the environment
+  (os/shell/cwd), and whether the call is a question or an automatic watch tick.
 
 Even so, watch mode spends requests on a timer — leave it off for normal use and
 flip it on when you want a live read on a long-running task.

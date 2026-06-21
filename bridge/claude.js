@@ -64,7 +64,31 @@ const MAX_TERMINAL_CHARS = 12000;
 // Cap on how much prior-conversation transcript we replay for continuity.
 const MAX_HISTORY_CHARS = 6000;
 
-export async function ask({ terminalContext, userMessage, cwd, history, onChunk }) {
+// A small, harness-injected context block telling Claude what this interaction
+// actually is: who it's running as, that it sees only a rolling snapshot, the
+// live environment, and whether this is an interactive question or an automatic
+// watch tick. Kept short on purpose — it's orientation, not instructions.
+function harnessContext({ cwd, shell, os, mode } = {}) {
+  const env = [os && `os ${os}`, shell && `shell ${shell}`, cwd && `cwd ${cwd}`]
+    .filter(Boolean)
+    .join(" · ");
+  const situation =
+    mode === "watch"
+      ? "This is an AUTOMATIC watch-mode check (the user did not ask a question). " +
+        "Only speak up if there is genuinely noteworthy NEW activity; otherwise reply (nothing)."
+      : "This is an interactive question the user typed in the side panel.";
+  return (
+    "<harness_context>\n" +
+    "You are term-copilot, embedded beside the user's live shell. You are shown a " +
+    "ROLLING SNAPSHOT of recent terminal output (not the full session) and reply in a " +
+    "narrow side panel — keep replies concise and skimmable. " +
+    situation +
+    (env ? `\nEnvironment: ${env}.` : "") +
+    "\n</harness_context>\n\n"
+  );
+}
+
+export async function ask({ terminalContext, userMessage, cwd, history, meta, onChunk }) {
   // Trim the terminal buffer to its tail so a large CLAUDE.md still fits.
   let term = terminalContext || "";
   if (term.length > MAX_TERMINAL_CHARS) {
@@ -87,6 +111,7 @@ export async function ask({ terminalContext, userMessage, cwd, history, onChunk 
   }
 
   const prompt =
+    harnessContext({ cwd, shell: meta?.shell, os: meta?.os, mode: meta?.mode }) +
     `<recent_terminal_output>\n${term || "(empty)"}\n</recent_terminal_output>\n\n` +
     transcript +
     `User: ${userMessage}`;

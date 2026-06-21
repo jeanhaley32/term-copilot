@@ -31,6 +31,9 @@ const buffer = new RollingBuffer(16000);
 // rules resolve from here (see claude.js). Falls back to the bridge's cwd.
 let termCwd = process.cwd();
 
+// Static environment facts the harness shares with Claude each interaction.
+const ENV_META = { shell: process.env.SHELL || null, os: process.platform };
+
 // One breaker shared across clients — the rate limit is account-wide.
 const guard = new RateGuard();
 
@@ -43,8 +46,8 @@ const MAX_HISTORY_TURNS = 24; // 12 exchanges
 // Periodically summarize NEW terminal activity — but only when the buffer
 // actually changed and the circuit is closed, so an idle terminal costs zero
 // requests. Off by default; toggled by the client.
-const WATCH_MIN_MS = 15000;
-const WATCH_DEFAULT_MS = 30000;
+const WATCH_MIN_MS = 10000;
+const WATCH_DEFAULT_MS = 10000;
 const watch = { on: false, intervalMs: WATCH_DEFAULT_MS, timer: null, lastSig: null };
 const sockets = new Set(); // connected clients' send fns, for broadcast
 
@@ -83,6 +86,7 @@ async function watchTick() {
         userMessage: WATCH_PROMPT,
         cwd: termCwd,
         history: [], // watch ticks are stateless
+        meta: Object.assign({ mode: "watch" }, ENV_META),
         onChunk: (c) => (text += c),
       }),
     );
@@ -160,6 +164,7 @@ const server = net.createServer((sock) => {
             userMessage: text,
             cwd: termCwd,
             history,
+            meta: Object.assign({ mode: "chat" }, ENV_META),
             onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
           }),
         );
