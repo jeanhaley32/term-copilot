@@ -11,6 +11,21 @@
 
 const client = require("./client.js");
 
+const PANEL_W = 380;
+
+// ---------------------------------------------------------------------------
+// 0. Reserve space for the panel. Hyper positions its terminal container
+//    (.terms_terms) absolutely filling the window, so a flexbox sibling won't
+//    shrink it. Instead we inset the terminal from the right by the panel
+//    width via injected CSS, and pin the panel itself `fixed` on the right.
+// ---------------------------------------------------------------------------
+exports.decorateConfig = (config) => {
+  const css = `
+    .terms_terms { right: ${PANEL_W}px !important; }
+  `;
+  return Object.assign({}, config, { css: (config.css || "") + css });
+};
+
 // ---------------------------------------------------------------------------
 // 1. Middleware — observe terminal output + cwd, forward to the bridge.
 // ---------------------------------------------------------------------------
@@ -157,11 +172,12 @@ exports.decorateHyper = (Hyper, { React }) => {
     }
   }
 
-  // Wrap Hyper: terminal on the left (flex), copilot panel pinned right.
+  // Render Hyper untouched + the copilot panel pinned `fixed` on the right
+  // (the terminal already reserves PANEL_W via decorateConfig CSS).
   return class CopilotHyper extends React.Component {
     render() {
-      return h("div", { style: STYLES.root }, [
-        h("div", { key: "term", style: STYLES.termWrap }, h(Hyper, this.props)),
+      return h(React.Fragment, null, [
+        h(Hyper, Object.assign({ key: "hyper" }, this.props)),
         h(ChatPanel, { key: "panel" }),
       ]);
     }
@@ -172,12 +188,13 @@ exports.decorateHyper = (Hyper, { React }) => {
 // Styling — inline so there's no CSS build step.
 // ---------------------------------------------------------------------------
 const STYLES = {
-  root: { display: "flex", flexDirection: "row", width: "100%", height: "100%" },
-  termWrap: { flex: 1, position: "relative", minWidth: 0 },
   panel: {
-    width: 380,
-    minWidth: 380,
-    height: "100%",
+    position: "fixed",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: PANEL_W,
+    zIndex: 100,
     display: "flex",
     flexDirection: "column",
     background: "#10131a",
