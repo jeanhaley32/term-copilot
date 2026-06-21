@@ -1,0 +1,7 @@
+{
+  "name": "hyper-term-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hyper plugin: a Claude copilot side panel that streams your terminal to the term-copilot bridge and chats about what you're doing.",
+  "main": "index.js"
+}
