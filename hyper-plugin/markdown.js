@@ -8,6 +8,7 @@
 function makeRenderer(React, opts) {
   const h = React.createElement;
   const onInsertCode = (opts && opts.onInsertCode) || null;
+  const onRunCode = (opts && opts.onRunCode) || null;
 
   // --- inline: `code`, **bold**, *italic* ---------------------------------
   function inline(text, keyPrefix) {
@@ -85,20 +86,28 @@ function makeRenderer(React, opts) {
         i++; // closing fence
         const code = buf.join("\n");
         const children = [h("pre", { key: "pre", style: S.codeBlock }, code)];
+        const btns = [];
         if (onInsertCode) {
-          children.push(
-            h(
-              "button",
-              {
-                key: "ins",
-                style: S.insertBtn,
-                title: "Insert into terminal (lands at the prompt; press Enter to run)",
-                onClick: () => onInsertCode(code),
-              },
-              "→ insert",
-            ),
+          btns.push(
+            h("button", {
+              key: "ins",
+              style: S.insertBtn,
+              title: "Insert at the prompt (does not run — review, then press Enter)",
+              onClick: () => onInsertCode(code),
+            }, "→ insert"),
           );
         }
+        if (onRunCode) {
+          btns.push(
+            h("button", {
+              key: "run",
+              style: S.runBtn,
+              title: "Paste into the terminal AND run it",
+              onClick: () => onRunCode(code),
+            }, "▶ run"),
+          );
+        }
+        if (btns.length) children.push(h("div", { key: "btns", style: S.codeBtns }, btns));
         blocks.push(h("div", { key: `b${k++}`, style: S.codeWrap }, children));
         continue;
       }
@@ -208,10 +217,8 @@ const S = {
     fontSize: 12,
     color: "#cfe1c0",
   },
+  codeBtns: { position: "absolute", top: 5, right: 5, display: "flex", gap: 5 },
   insertBtn: {
-    position: "absolute",
-    top: 5,
-    right: 5,
     background: "#1c2230",
     color: "#8ab4f8",
     border: "1px solid #2a2f3a",
@@ -220,6 +227,16 @@ const S = {
     padding: "2px 7px",
     cursor: "pointer",
     opacity: 0.9,
+  },
+  runBtn: {
+    background: "#12261a",
+    color: "#7ee0a1",
+    border: "1px solid #2e6f4a",
+    borderRadius: 5,
+    fontSize: 10,
+    padding: "2px 7px",
+    cursor: "pointer",
+    opacity: 0.95,
   },
 };
 

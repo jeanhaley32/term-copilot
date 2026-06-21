@@ -42,12 +42,13 @@ let hyperStore = null;
 // markers (ESC[200~ … ESC[201~) so multi-line snippets land at the prompt for
 // review instead of auto-executing. Uses the same rpc 'data' path keystrokes
 // take (window.rpc is exposed by Hyper).
-function writeToTerminal(text) {
+function writeToTerminal(text, run) {
   try {
     if (!hyperStore || !text) return;
     const uid = hyperStore.getState().sessions.activeUid;
     if (!uid) return;
-    const data = "\x1b[200~" + text + "\x1b[201~";
+    // Bracketed paste so multi-line snippets land intact; append CR to execute.
+    const data = "\x1b[200~" + text + "\x1b[201~" + (run ? "\r" : "");
     if (typeof window !== "undefined" && window.rpc) {
       window.rpc.emit("data", { uid, data });
     } else {
@@ -107,7 +108,10 @@ exports.middleware = (store) => (next) => (action) => {
 // ---------------------------------------------------------------------------
 exports.decorateHyper = (Hyper, { React }) => {
   const h = React.createElement;
-  const renderMarkdown = makeRenderer(React, { onInsertCode: writeToTerminal });
+  const renderMarkdown = makeRenderer(React, {
+    onInsertCode: (code) => writeToTerminal(code, false),
+    onRunCode: (code) => writeToTerminal(code, true),
+  });
 
   class ChatPanel extends React.Component {
     constructor(props) {
