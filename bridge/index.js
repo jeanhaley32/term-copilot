@@ -231,6 +231,71 @@ function saveSessions(list) {
 }
 let savedSessions = loadSessions();
 
+// Claude Code's project dir for a cwd (slashes/dots → dashes).
+function encodeProject(cwd) {
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+// List recent sessions on disk for a directory (Claude Code auto-persists every
+// session), newest first, labeled by their first user message. This is what
+// makes resume work without a manual save — like Claude Code's /resume.
+function diskSessions(cwd) {
+  const dir = path.join(os.homedir(), ".claude", "projects", encodeProject(cwd));
+  let files;
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const f of files) {
+    const sessionId = f.replace(/\.jsonl$/, "");
+    const p = path.join(dir, f);
+    let savedAt = 0;
+    let label = "";
+    try {
+      savedAt = fs.statSync(p).mtimeMs;
+      // Read only the head to find the first real user message (files get big).
+      const fd = fs.openSync(p, "r");
+      const buf = Buffer.alloc(65536);
+      const n = fs.readSync(fd, buf, 0, 65536, 0);
+      fs.closeSync(fd);
+      for (const line of buf.toString("utf8", 0, n).split("\n")) {
+        if (!line.trim()) continue;
+        let r;
+        try {
+          r = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (r.type === "user" && r.message) {
+          const c = r.message.content;
+          let t =
+            typeof c === "string"
+              ? c
+              : Array.isArray(c)
+                ? c.filter((b) => b.type === "text").map((b) => b.text).join("")
+                : "";
+          t = t.replace(/<recent_terminal_output>[\s\S]*?<\/recent_terminal_output>/g, "");
+          const i = t.lastIndexOf("\nUser: ");
+          if (i !== -1) t = t.slice(i + 7);
+          t = t.trim();
+          if (t) { label = t.slice(0, 60); break; }
+        }
+      }
+    } catch {
+      /* skip unreadable */
+    }
+    out.push({ sessionId, label: label || "(no preview)", savedAt });
+  }
+  out.sort((a, b) => b.savedAt - a.savedAt);
+  return out.slice(0, 25);
+}
+
+function sessionsPayload() {
+  return { type: "sessions", list: savedSessions, recent: diskSessions(termCwd) };
+}
+
 // Read Claude Code's on-disk transcript for a session id so the panel can
 // repaint the prior conversation on resume. Returns [{role, text}].
 function readTranscript(sessionId) {
@@ -395,35 +460,30 @@ const server = net.createServer((sock) => {
       return;
     }
     if (msg.type === "session_list") {
-      send({ type: "sessions", list: savedSessions });
+      send(sessionsPayload());
       return;
     }
     if (msg.type === "session_save") {
-      // Save (or rename) the current live session under a friendly name.
+      // Name a session (the current live one, or any id from the recent list).
+      // Upsert by id — you can't save the same session twice; a new name renames.
       const name = (msg.name || "").trim();
-      if (!name || !session.id) {
-        send({ type: "sessions", list: savedSessions });
+      const id = msg.sessionId || session.id;
+      if (!name || !id) {
+        send(sessionsPayload());
         return;
       }
-      savedSessions = savedSessions.filter((s) => s.sessionId !== session.id);
-      savedSessions.unshift({ name, sessionId: session.id, cwd: termCwd, savedAt: Date.now() });
+      savedSessions = savedSessions.filter((s) => s.sessionId !== id);
+      savedSessions.unshift({ name, sessionId: id, cwd: termCwd, savedAt: Date.now() });
       saveSessions(savedSessions);
-      log(`session saved: ${name} (${session.id})`);
-      broadcast({ type: "sessions", list: savedSessions });
-      return;
-    }
-    if (msg.type === "session_rename") {
-      savedSessions = savedSessions.map((s) =>
-        s.sessionId === msg.sessionId ? { ...s, name: (msg.name || s.name).trim() } : s,
-      );
-      saveSessions(savedSessions);
-      broadcast({ type: "sessions", list: savedSessions });
+      log(`session saved: ${name} (${id})`);
+      broadcast(sessionsPayload());
       return;
     }
     if (msg.type === "session_delete") {
+      // Removes the bookmark only; the on-disk transcript is untouched.
       savedSessions = savedSessions.filter((s) => s.sessionId !== msg.sessionId);
       saveSessions(savedSessions);
-      broadcast({ type: "sessions", list: savedSessions });
+      broadcast(sessionsPayload());
       return;
     }
     if (msg.type === "session_resume") {
@@ -555,7 +615,7 @@ const server = net.createServer((sock) => {
   send({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
   send({ type: "tools_state", on: tools.on });
   send({ type: "session_state", on: session.on });
-  send({ type: "sessions", list: savedSessions });
+  send(sessionsPayload());
   if (lastSlash.length) send({ type: "slash_commands", commands: lastSlash });
 });
 

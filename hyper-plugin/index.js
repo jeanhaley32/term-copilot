@@ -133,9 +133,11 @@ exports.decorateHyper = (Hyper, { React }) => {
         slashCommands: DEFAULT_SLASH, // seeded; replaced by the live list on init
         slashSel: 0, // highlighted index in the slash popup
         slashHidden: false, // dismissed with Esc until next keystroke
-        sessions: [], // saved sessions [{ name, sessionId, cwd, savedAt }]
+        sessions: [], // saved/named sessions [{ name, sessionId, cwd, savedAt }]
+        recentSessions: [], // recent sessions from disk [{ sessionId, label, savedAt }]
         showSessions: false,
         saveName: "",
+        renameTarget: null, // session id being named/renamed (null = name current)
       };
       this.onToggleSession = this.onToggleSession.bind(this);
       this.onToggleSessions = this.onToggleSessions.bind(this);
@@ -197,7 +199,9 @@ exports.decorateHyper = (Hyper, { React }) => {
       this._bind("slash_commands", (m) => {
         if (Array.isArray(m.commands) && m.commands.length) this.setState({ slashCommands: m.commands });
       });
-      this._bind("sessions", (m) => this.setState({ sessions: m.list || [] }));
+      this._bind("sessions", (m) =>
+        this.setState({ sessions: m.list || [], recentSessions: m.recent || [] }),
+      );
       this._bind("transcript", (m) =>
         this.setState({
           messages: (m.messages || []).concat([
@@ -305,8 +309,13 @@ exports.decorateHyper = (Hyper, { React }) => {
     onSaveSession() {
       const name = this.state.saveName.trim();
       if (!name) return;
-      client.send({ type: "session_save", name });
-      this.setState({ saveName: "" });
+      // renameTarget set → name that specific session; else the current live one.
+      client.send({ type: "session_save", name, sessionId: this.state.renameTarget || undefined });
+      this.setState({ saveName: "", renameTarget: null });
+    }
+
+    _startRename(sessionId, name) {
+      this.setState({ renameTarget: sessionId, saveName: name || "" });
     }
 
     _resumeSession(sessionId) {
@@ -440,39 +449,54 @@ exports.decorateHyper = (Hyper, { React }) => {
     _renderSessions() {
       const h = React.createElement;
       const S = STYLES;
-      const items = this.state.sessions.length
-        ? this.state.sessions.map((s) =>
-            h("div", { key: s.sessionId, style: S.sessRow }, [
-              h("button", {
-                key: "n",
-                style: S.sessName,
-                title: "Resume this session",
-                onClick: () => this._resumeSession(s.sessionId),
-              }, "↩ " + s.name),
-              h("button", {
-                key: "x",
-                style: S.sessDel,
-                title: "Delete",
-                onClick: () => this._deleteSession(s.sessionId),
-              }, "×"),
-            ]),
-          )
-        : [h("div", { key: "empty", style: S.sessEmpty }, "No saved sessions yet.")];
-      return h("div", { key: "sessions", style: S.sessMenu }, [
-        h("div", { key: "save", style: S.sessSaveRow }, [
-          h("input", {
-            key: "in",
-            style: S.sessInput,
-            placeholder: this.state.sessionOn ? "name this session…" : "turn on session to save",
-            value: this.state.saveName,
-            disabled: !this.state.sessionOn,
-            onChange: (e) => this.setState({ saveName: e.target.value }),
-            onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.onSaveSession(); } },
-          }),
-          h("button", { key: "b", style: S.sessSaveBtn, onClick: this.onSaveSession, disabled: !this.state.sessionOn }, "save"),
-        ]),
-        ...items,
+      const savedIds = new Set(this.state.sessions.map((s) => s.sessionId));
+      const target = this.state.renameTarget;
+      const canSave = !!(this.state.sessionOn || target);
+
+      // Save / rename bar
+      const placeholder = target ? "new name… (Enter to save)" : this.state.sessionOn
+        ? "name this session…" : "turn session on to save the current one";
+      const bar = h("div", { key: "save", style: S.sessSaveRow }, [
+        h("input", {
+          key: "in",
+          style: S.sessInput,
+          placeholder,
+          value: this.state.saveName,
+          disabled: !canSave,
+          ref: (el) => { if (el && target) el.focus(); },
+          onChange: (e) => this.setState({ saveName: e.target.value }),
+          onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.onSaveSession(); } if (e.key === "Escape") this.setState({ renameTarget: null, saveName: "" }); },
+        }),
+        h("button", { key: "b", style: S.sessSaveBtn, onClick: this.onSaveSession, disabled: !canSave }, target ? "rename" : "save"),
       ]);
+
+      const savedRows = this.state.sessions.map((s) =>
+        h("div", { key: s.sessionId, style: S.sessRow }, [
+          h("button", { key: "n", style: S.sessName, title: "Resume", onClick: () => this._resumeSession(s.sessionId) }, "↩ " + s.name),
+          h("button", { key: "e", style: S.sessDel, title: "Rename", onClick: () => this._startRename(s.sessionId, s.name) }, "✎"),
+          h("button", { key: "x", style: S.sessDel, title: "Remove bookmark", onClick: () => this._deleteSession(s.sessionId) }, "×"),
+        ]),
+      );
+
+      const recent = this.state.recentSessions.filter((s) => !savedIds.has(s.sessionId));
+      const recentRows = recent.map((s) =>
+        h("div", { key: s.sessionId, style: S.sessRow }, [
+          h("button", { key: "n", style: S.sessName, title: "Resume", onClick: () => this._resumeSession(s.sessionId) }, "↩ " + s.label),
+          h("button", { key: "s", style: S.sessDel, title: "Name / save", onClick: () => this._startRename(s.sessionId, "") }, "+"),
+        ]),
+      );
+
+      const groups = [bar];
+      if (savedRows.length) {
+        groups.push(h("div", { key: "sh", style: S.sessGroup }, "saved"), ...savedRows);
+      }
+      if (recentRows.length) {
+        groups.push(h("div", { key: "rh", style: S.sessGroup }, "recent"), ...recentRows);
+      }
+      if (!savedRows.length && !recentRows.length) {
+        groups.push(h("div", { key: "empty", style: S.sessEmpty }, "No sessions yet."));
+      }
+      return h("div", { key: "sessions", style: S.sessMenu }, groups);
     }
 
     _renderSlashMenu() {
@@ -721,6 +745,7 @@ const STYLES = {
     cursor: "pointer",
   },
   sessEmpty: { padding: "8px 10px", fontSize: 11, color: "#5f6878" },
+  sessGroup: { padding: "5px 10px 2px", fontSize: 9.5, color: "#5f6878", textTransform: "uppercase", letterSpacing: 1 },
   ctxWrap: { padding: "0 12px 8px" },
   ctxLabel: { fontSize: 10, color: "#7e8796", marginBottom: 3 },
   ctxBar: { height: 5, display: "flex", background: "#1c2230", borderRadius: 3, overflow: "hidden" },

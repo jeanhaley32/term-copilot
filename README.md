@@ -180,14 +180,19 @@ warning on startup if `ANTHROPIC_API_KEY` is set, since that would bill the API.
 
 ### Saving & recalling sessions
 
-The **`▾`** button next to the session toggle opens a popup to **save the current
-session** under a name and **recall** past ones. Saving remembers the SDK session
-id (in `~/.term-copilot/sessions.json`); recalling uses the SDK's `resume`, so
-the model picks up the prior conversation's full memory. Click a saved name to
-resume it, `×` to delete. (Saving again with a new name renames it.)
+The **`▾`** button next to the session toggle opens a popup with two groups,
+just like Claude Code's `/resume`:
 
-Recall restores both the *model's* memory (via `resume`) **and the visible
-panel** — it repaints the prior conversation by reading Claude Code's on-disk
+- **recent** — every session is auto-persisted by Claude Code, so your recent
+  conversations (for the current directory) appear here automatically, labeled by
+  their first message. **No manual save needed** — click any to resume it.
+- **saved** — sessions you've **named** (a bookmark stored in
+  `~/.term-copilot/sessions.json`). Name the current one in the input, `✎` to
+  rename, `×` to remove the bookmark, `+` on a recent one to name it. You can't
+  save the same session twice — naming it again just renames it.
+
+Resuming (either group) uses the SDK's `resume`, so the model regains the prior
+conversation's memory **and** the panel repaints it from Claude Code's on-disk
 transcript, ending with a "↩ resumed" note.
 
 ### Session mode (running context window)
@@ -247,7 +252,7 @@ NDJSON over the socket (see `bridge/protocol.js`):
 
 - client → bridge: `term_data` · `cwd` · `chat_msg` · `clear` · `watch` ·
   `tools` · `session` · `permission_response` · `session_list` ·
-  `session_save` · `session_rename` · `session_delete` · `session_resume`
+  `session_save` · `session_delete` · `session_resume`
 - bridge → client: `chat_stream` · `chat_done` · `chat_error` · `rate_limited` ·
   `rate_status` · `watch_update` · `watch_state` · `tool_use` ·
   `permission_request` · `tools_state` · `session_state` · `context` ·
