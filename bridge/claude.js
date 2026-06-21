@@ -95,6 +95,8 @@ export async function ask({
   history,
   meta,
   tools, // { enabled, allowedTools, canUseTool, onTool } or null
+  sessionMode, // when true, resume a persistent session (running window)
+  sessionId, // session to resume (null = start fresh)
   onChunk,
 }) {
   // Trim the terminal buffer to its tail so a large CLAUDE.md still fits.
@@ -103,10 +105,12 @@ export async function ask({
     term = "…(truncated)…\n" + term.slice(term.length - MAX_TERMINAL_CHARS);
   }
 
+  // In session mode the SDK holds the conversation (we resume it), so we do NOT
+  // replay our own transcript — that's the whole point of the running window.
   // Replay recent chat turns so follow-ups have context. Trim from the front
   // (oldest) to a char budget so the window stays bounded.
   let transcript = "";
-  if (Array.isArray(history) && history.length) {
+  if (!sessionMode && Array.isArray(history) && history.length) {
     const turns = history.map(
       (t) => `${t.role === "user" ? "User" : "Assistant"}: ${t.text}`,
     );
@@ -146,10 +150,19 @@ export async function ask({
     options.permissionMode = "default";
     options.canUseTool = tools.canUseTool;
   }
+  // Resume the running session so context accumulates and the SDK auto-compacts
+  // it (protecting CLAUDE.md) when it fills — the running-window behavior.
+  if (sessionMode && sessionId) options.resume = sessionId;
 
   const q = query({ prompt, options });
 
+  let newSessionId = sessionId || null;
+  let contextTokens = 0;
+
   for await (const msg of q) {
+    if (msg.type === "system" && msg.subtype === "init" && msg.session_id) {
+      newSessionId = msg.session_id;
+    }
     if (msg.type === "stream_event") {
       const ev = msg.event;
       if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
@@ -172,6 +185,14 @@ export async function ask({
     } else if (msg.type === "result") {
       usage = msg.usage || usage;
       rateLimits = msg.rate_limits || rateLimits;
+      if (msg.session_id) newSessionId = msg.session_id;
+      // Total context the model held this turn = fresh input + cached context.
+      if (msg.usage) {
+        contextTokens =
+          (msg.usage.input_tokens || 0) +
+          (msg.usage.cache_read_input_tokens || 0) +
+          (msg.usage.cache_creation_input_tokens || 0);
+      }
       if (msg.subtype !== "success") {
         // If a rate limit caused this, throw the typed error so the breaker
         // can react; otherwise surface a generic failure.
@@ -188,5 +209,5 @@ export async function ask({
     throw new RateLimitError(rateInfo);
   }
 
-  return { text: full, usage, rateLimits, rateInfo };
+  return { text: full, usage, rateLimits, rateInfo, sessionId: newSessionId, contextTokens };
 }

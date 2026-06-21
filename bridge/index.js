@@ -88,6 +88,12 @@ const guard = new RateGuard();
 let history = [];
 const MAX_HISTORY_TURNS = 24; // 12 exchanges
 
+// ---- session mode (running context window) -----------------------------
+// Off by default (cheap stateless Q&A). When on, we resume one persistent SDK
+// session so context accumulates and the SDK auto-compacts it when it fills.
+const session = { on: false, id: null };
+const CONTEXT_MAX = 200000; // model window; used for the fill meter %
+
 // ---- watch mode --------------------------------------------------------
 // Periodically summarize NEW terminal activity — but only when the buffer
 // actually changed and the circuit is closed, so an idle terminal costs zero
@@ -189,6 +195,13 @@ const server = net.createServer((sock) => {
       log("history cleared");
       return;
     }
+    if (msg.type === "session") {
+      session.on = !!msg.on;
+      if (!session.on) session.id = null; // drop the running window
+      log(`session ${session.on ? "on" : "off"}`);
+      broadcast({ type: "session_state", on: session.on });
+      return;
+    }
     if (msg.type === "tools") {
       tools.on = !!msg.on;
       if (!tools.on) tools.allow.clear(); // drop session approvals when disabled
@@ -225,6 +238,8 @@ const server = net.createServer((sock) => {
             userMessage: text,
             cwd: termCwd,
             history,
+            sessionMode: session.on,
+            sessionId: session.id,
             meta: Object.assign({ mode: "chat", tools: tools.on }, ENV_META),
             tools: tools.on
               ? {
@@ -238,14 +253,29 @@ const server = net.createServer((sock) => {
             onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
           }),
         );
-        // Record the exchange for follow-up continuity.
-        history.push({ role: "user", text });
-        history.push({ role: "assistant", text: result?.text || "" });
-        if (history.length > MAX_HISTORY_TURNS) {
-          history = history.slice(history.length - MAX_HISTORY_TURNS);
+        if (session.on) {
+          // Running window: the SDK holds the conversation; track its id.
+          if (result?.sessionId) session.id = result.sessionId;
+        } else {
+          // Stateless: keep our own trimmed transcript for replay.
+          history.push({ role: "user", text });
+          history.push({ role: "assistant", text: result?.text || "" });
+          if (history.length > MAX_HISTORY_TURNS) {
+            history = history.slice(history.length - MAX_HISTORY_TURNS);
+          }
+        }
+        // Context fill meter (total tokens held this turn vs the window).
+        if (result?.contextTokens) {
+          broadcast({
+            type: "context",
+            tokens: result.contextTokens,
+            max: CONTEXT_MAX,
+            percentage: Math.min(100, Math.round((result.contextTokens / CONTEXT_MAX) * 100)),
+            session: session.on,
+          });
         }
         send({ type: "chat_done" });
-        log("chat_done");
+        log("chat_done" + (session.on ? ` · ctx ${result?.contextTokens || 0}` : ""));
       } catch (err) {
         if (err instanceof CircuitOpenError) {
           // Rate-limited: tell the client when to try again, don't treat as a
@@ -282,6 +312,7 @@ const server = net.createServer((sock) => {
   send({ type: "status", text: "connected to term-copilot bridge" });
   send({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
   send({ type: "tools_state", on: tools.on });
+  send({ type: "session_state", on: session.on });
 });
 
 server.listen(SOCK, () => {

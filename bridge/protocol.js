@@ -12,6 +12,7 @@
 //     { "type": "clear" }    reset conversation history
 //     { "type": "watch",     "on": bool, "intervalMs"? } toggle watch mode
 //     { "type": "tools",     "on": bool } toggle workspace tools
+//     { "type": "session",   "on": bool } toggle running-window session mode
 //     { "type": "permission_response", "id", "decision": "allow"|"deny",
 //                            "scope": "once"|"session"|"session-tool" }
 //   bridge -> client:
@@ -25,6 +26,8 @@
 //     { "type": "tool_use",     "name", "detail" } Claude used a tool
 //     { "type": "permission_request", "id", "name", "detail", "signature" }
 //     { "type": "tools_state",  "on": bool }
+//     { "type": "session_state","on": bool }
+//     { "type": "context",      "tokens", "max", "percentage", "session" }
 //     { "type": "status",       "text": "<human-readable status>" }
 
 export function encode(obj) {

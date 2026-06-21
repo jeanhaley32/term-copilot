@@ -58,6 +58,11 @@ below for detail.
   grep, and run commands in your terminal's directory. Read-only is auto-allowed;
   mutating actions (Bash/Edit/Write) require approval, with a per-session
   allow-list so you don't re-approve the same action.
+- **Session mode** — opt-in running conversation window (like Claude Code):
+  resumes one persistent SDK session so context accumulates, with the SDK's
+  built-in auto-compaction when it fills (CLAUDE.md is preserved). A context
+  meter in the panel shows how full the window is. Off by default (stateless
+  Q&A is cheaper).
 - **Watch mode** — opt-in live updates that summarize new activity, with
   guardrails so an idle terminal costs nothing.
 - **Rate-limit resilient** — a circuit breaker that respects the server's reset
@@ -150,9 +155,25 @@ warning on startup if `ANTHROPIC_API_KEY` is set, since that would bill the API.
 - **Ask** — type in the box, Enter to send (Shift+Enter for a newline).
 - **⌘⇧L** — "look at this": ask about whatever's on screen right now.
 - **→ insert** — on a code block, drops the snippet at your shell prompt.
+- **session** — toggle the running context window (see below); a meter shows fill.
 - **tools** — toggle the workspace harness (see below).
 - **watch** — toggle live updates; the dropdown sets the cadence (10s/30s/60s).
 - **clear** — reset the conversation.
+
+### Session mode (running context window)
+
+By default each message is a fresh, bounded query (cheap, no growing window).
+Toggle **session** to instead keep one **persistent conversation** that
+accumulates context across turns — like Claude Code:
+
+- Continuity: it remembers earlier turns without us replaying a transcript.
+- The SDK **auto-compacts** the conversation when the window fills, preserving
+  CLAUDE.md — you don't manage it.
+- A meter shows context fill (turns amber past 80%, near a compaction).
+
+Best for long, building conversations (debugging a thread, a learning session).
+It re-sends accumulated context each turn, so it costs more than stateless
+Q&A — leave it off for quick one-offs.
 
 ### Workspace tools
 

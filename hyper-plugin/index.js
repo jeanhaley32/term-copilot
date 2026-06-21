@@ -117,7 +117,10 @@ exports.decorateHyper = (Hyper, { React }) => {
         toolsOn: false,
         perm: null, // pending permission request { id, name, detail, signature }
         width: savedWidth(),
+        sessionOn: false,
+        ctx: null, // { tokens, max, percentage }
       };
+      this.onToggleSession = this.onToggleSession.bind(this);
       this.onDragStart = this.onDragStart.bind(this);
       this._onDrag = this._onDrag.bind(this);
       this._endDrag = this._endDrag.bind(this);
@@ -170,6 +173,8 @@ exports.decorateHyper = (Hyper, { React }) => {
         })),
       );
       this._bind("permission_request", (m) => this.setState({ perm: m }));
+      this._bind("session_state", (m) => this.setState({ sessionOn: !!m.on }));
+      this._bind("context", (m) => this.setState({ ctx: m }));
     }
 
     componentWillUnmount() {
@@ -235,6 +240,12 @@ exports.decorateHyper = (Hyper, { React }) => {
       this.setState({ intervalMs });
       // If watching, re-arm at the new cadence; otherwise just remember it.
       if (this.state.watchOn) client.send({ type: "watch", on: true, intervalMs });
+    }
+
+    onToggleSession() {
+      const on = !this.state.sessionOn;
+      this.setState({ sessionOn: on, ctx: on ? this.state.ctx : null });
+      client.send({ type: "session", on });
     }
 
     onToggleTools() {
@@ -335,6 +346,11 @@ exports.decorateHyper = (Hyper, { React }) => {
         S.clearBtn,
         this.state.toolsOn ? S.toolsBtnOn : null,
       );
+      const sessionBtnStyle = Object.assign(
+        {},
+        S.clearBtn,
+        this.state.sessionOn ? S.sessionBtnOn : null,
+      );
       return h("div", { style: Object.assign({}, S.panel, { width: this.state.width }) }, [
         h("div", {
           key: "drag",
@@ -345,7 +361,9 @@ exports.decorateHyper = (Hyper, { React }) => {
         h("div", { key: "hd", style: S.header }, [
           h("span", { key: "t" }, "◇ copilot"),
           h("span", { key: "btns" }, [
-            h("button", { key: "tl", style: toolsBtnStyle, onClick: this.onToggleTools, title: "Workspace tools: let Claude read files / run commands (with approval)" },
+            h("button", { key: "se", style: sessionBtnStyle, onClick: this.onToggleSession, title: "Session mode: a running conversation window (auto-compacts when full)" },
+              this.state.sessionOn ? "∞ session" : "session"),
+            h("button", { key: "tl", style: Object.assign({ marginLeft: 6 }, toolsBtnStyle), onClick: this.onToggleTools, title: "Workspace tools: let Claude read files / run commands (with approval)" },
               this.state.toolsOn ? "⚒ tools" : "tools"),
             h("button", { key: "w", style: Object.assign({ marginLeft: 6 }, watchBtnStyle), onClick: this.onToggleWatch, title: "Watch mode: auto-summarize new activity" },
               this.state.watchOn ? "● watching" : "watch"),
@@ -364,6 +382,21 @@ exports.decorateHyper = (Hyper, { React }) => {
           ]),
         ]),
         h("div", { key: "st", style: S.status }, this._rateLabel() + "   ·   ⌘⇧L: look at screen"),
+        this.state.sessionOn && this.state.ctx
+          ? h("div", { key: "ctx", style: S.ctxWrap }, [
+              h("div", { key: "lbl", style: S.ctxLabel },
+                `context ${this.state.ctx.percentage}% · ${(this.state.ctx.tokens / 1000).toFixed(0)}K / ${(this.state.ctx.max / 1000).toFixed(0)}K`),
+              h("div", { key: "bar", style: S.ctxBar }, [
+                h("div", {
+                  key: "fill",
+                  style: Object.assign({}, S.ctxFill, {
+                    width: this.state.ctx.percentage + "%",
+                    background: this.state.ctx.percentage >= 80 ? "#e0a86b" : "#5aa9e6",
+                  }),
+                }),
+              ]),
+            ])
+          : null,
         this.state.watchOn && this.state.watchText
           ? h("div", { key: "wb", style: S.watchBanner }, "👁  " + this.state.watchText)
           : null,
@@ -461,6 +494,11 @@ const STYLES = {
   },
   watchBtnOn: { color: "#7ee0a1", borderColor: "#2e6f4a", background: "#10261a" },
   toolsBtnOn: { color: "#e6b673", borderColor: "#6f5320", background: "#26200f" },
+  sessionBtnOn: { color: "#8ab4f8", borderColor: "#2b4a6f", background: "#0f1a26" },
+  ctxWrap: { padding: "0 12px 8px" },
+  ctxLabel: { fontSize: 10, color: "#7e8796", marginBottom: 3 },
+  ctxBar: { height: 4, background: "#1c2230", borderRadius: 3, overflow: "hidden" },
+  ctxFill: { height: "100%", transition: "width .3s" },
   permCard: {
     margin: "0 12px 8px",
     padding: "8px 10px",
