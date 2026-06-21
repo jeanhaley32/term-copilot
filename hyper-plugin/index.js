@@ -16,6 +16,7 @@ const PANEL_W = 380; // default width
 const PANEL_MIN = 260;
 const PANEL_MAX = 900;
 const WIDTH_KEY = "termCopilotWidth";
+const PALETTE = ["#5aa9e6", "#e6b673", "#7ee0a1", "#c08af0", "#e08a8a", "#6fd0d0"];
 
 function savedWidth() {
   try {
@@ -118,7 +119,8 @@ exports.decorateHyper = (Hyper, { React }) => {
         perm: null, // pending permission request { id, name, detail, signature }
         width: savedWidth(),
         sessionOn: false,
-        ctx: null, // { tokens, max, percentage }
+        ctx: null, // { tokens, max, percentage, categories }
+        slashCommands: [],
       };
       this.onToggleSession = this.onToggleSession.bind(this);
       this.onDragStart = this.onDragStart.bind(this);
@@ -175,6 +177,7 @@ exports.decorateHyper = (Hyper, { React }) => {
       this._bind("permission_request", (m) => this.setState({ perm: m }));
       this._bind("session_state", (m) => this.setState({ sessionOn: !!m.on }));
       this._bind("context", (m) => this.setState({ ctx: m }));
+      this._bind("slash_commands", (m) => this.setState({ slashCommands: m.commands || [] }));
     }
 
     componentWillUnmount() {
@@ -233,6 +236,20 @@ exports.decorateHyper = (Hyper, { React }) => {
       const on = !this.state.watchOn;
       this.setState({ watchOn: on });
       client.send({ type: "watch", on, intervalMs: this.state.intervalMs });
+    }
+
+    // Slash commands matching what's typed (session mode only).
+    _slashMatches() {
+      if (!this.state.sessionOn) return [];
+      const v = this.state.input;
+      if (!v.startsWith("/")) return [];
+      const q = v.slice(1).toLowerCase();
+      return this.state.slashCommands.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 8);
+    }
+
+    _pickSlash(cmd) {
+      this.setState({ input: "/" + cmd + " " });
+      if (this._taEl) this._taEl.focus();
     }
 
     onChangeInterval(e) {
@@ -305,6 +322,39 @@ exports.decorateHyper = (Hyper, { React }) => {
 
     onSubmit() {
       this._ask(this.state.input.trim());
+    }
+
+    _renderMeter() {
+      const h = React.createElement;
+      const ctx = this.state.ctx;
+      const cats = (ctx.categories || []).filter((c) => c.name !== "Free space" && c.tokens > 0);
+      const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(0) + "K" : String(n));
+      const maxLbl = ctx.max >= 1e6 ? (ctx.max / 1e6).toFixed(1) + "M" : fmt(ctx.max);
+      // honest fill bar: each category's slice of the full window
+      const segs = cats.map((c, i) =>
+        h("div", {
+          key: i,
+          title: `${c.name}: ${c.tokens.toLocaleString()}`,
+          style: {
+            height: "100%",
+            width: Math.max(0.3, (c.tokens / ctx.max) * 100) + "%",
+            background: c.color || PALETTE[i % PALETTE.length],
+          },
+        }),
+      );
+      // legend: top categories by tokens
+      const legend = cats
+        .slice()
+        .sort((a, b) => b.tokens - a.tokens)
+        .slice(0, 4)
+        .map((c) => `${c.name} ${fmt(c.tokens)}`)
+        .join(" · ");
+      return h("div", { key: "ctx", style: STYLES.ctxWrap }, [
+        h("div", { key: "lbl", style: STYLES.ctxLabel },
+          `context ${ctx.percentage}% · ${fmt(ctx.tokens)} / ${maxLbl}${ctx.percentage >= 80 ? "  ⚠ compaction near" : ""}`),
+        h("div", { key: "bar", style: STYLES.ctxBar }, segs),
+        legend ? h("div", { key: "leg", style: STYLES.ctxLegend }, legend) : null,
+      ]);
     }
 
     _rateLabel() {
@@ -382,21 +432,7 @@ exports.decorateHyper = (Hyper, { React }) => {
           ]),
         ]),
         h("div", { key: "st", style: S.status }, this._rateLabel() + "   ·   ⌘⇧L: look at screen"),
-        this.state.sessionOn && this.state.ctx
-          ? h("div", { key: "ctx", style: S.ctxWrap }, [
-              h("div", { key: "lbl", style: S.ctxLabel },
-                `context ${this.state.ctx.percentage}% · ${(this.state.ctx.tokens / 1000).toFixed(0)}K / ${(this.state.ctx.max / 1000).toFixed(0)}K`),
-              h("div", { key: "bar", style: S.ctxBar }, [
-                h("div", {
-                  key: "fill",
-                  style: Object.assign({}, S.ctxFill, {
-                    width: this.state.ctx.percentage + "%",
-                    background: this.state.ctx.percentage >= 80 ? "#e0a86b" : "#5aa9e6",
-                  }),
-                }),
-              ]),
-            ])
-          : null,
+        this.state.sessionOn && this.state.ctx ? this._renderMeter() : null,
         this.state.watchOn && this.state.watchText
           ? h("div", { key: "wb", style: S.watchBanner }, "👁  " + this.state.watchText)
           : null,
@@ -411,6 +447,13 @@ exports.decorateHyper = (Hyper, { React }) => {
                 h("button", { key: "3", style: S.permDeny, onClick: () => this.respondPerm("deny") }, "Deny"),
               ]),
             ])
+          : null,
+        this._slashMatches().length
+          ? h("div", { key: "slash", style: S.slashWrap },
+              this._slashMatches().map((c) =>
+                h("button", { key: c, style: S.slashChip, onClick: () => this._pickSlash(c) }, "/" + c),
+              ),
+            )
           : null,
         h("div", { key: "in", style: S.inputRow }, [
           h("textarea", {
@@ -497,8 +540,19 @@ const STYLES = {
   sessionBtnOn: { color: "#8ab4f8", borderColor: "#2b4a6f", background: "#0f1a26" },
   ctxWrap: { padding: "0 12px 8px" },
   ctxLabel: { fontSize: 10, color: "#7e8796", marginBottom: 3 },
-  ctxBar: { height: 4, background: "#1c2230", borderRadius: 3, overflow: "hidden" },
-  ctxFill: { height: "100%", transition: "width .3s" },
+  ctxBar: { height: 5, display: "flex", background: "#1c2230", borderRadius: 3, overflow: "hidden" },
+  ctxLegend: { fontSize: 9.5, color: "#5f6878", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  slashWrap: { padding: "0 8px 6px", display: "flex", flexWrap: "wrap", gap: 4 },
+  slashChip: {
+    background: "#10131a",
+    color: "#8ab4f8",
+    border: "1px solid #2a2f3a",
+    borderRadius: 5,
+    fontSize: 10.5,
+    padding: "2px 7px",
+    cursor: "pointer",
+    fontFamily: "Menlo, monospace",
+  },
   permCard: {
     margin: "0 12px 8px",
     padding: "8px 10px",

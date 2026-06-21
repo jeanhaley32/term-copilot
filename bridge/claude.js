@@ -27,9 +27,9 @@ function normalizeEpochMs(t) {
   return t < 1e12 ? t * 1000 : t;
 }
 
-const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
+export const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
 
-const COPILOT_PROMPT = `You are a terminal copilot. The user is working in a shell and you sit in a
+export const COPILOT_PROMPT = `You are a terminal copilot. The user is working in a shell and you sit in a
 chat side panel beside it. You are given a snapshot of their RECENT terminal
 output as context, followed by their message.
 
@@ -68,7 +68,7 @@ const MAX_HISTORY_CHARS = 6000;
 // actually is: who it's running as, that it sees only a rolling snapshot, the
 // live environment, and whether this is an interactive question or an automatic
 // watch tick. Kept short on purpose — it's orientation, not instructions.
-function harnessContext({ cwd, shell, os, mode } = {}) {
+export function harnessContext({ cwd, shell, os, mode } = {}) {
   const env = [os && `os ${os}`, shell && `shell ${shell}`, cwd && `cwd ${cwd}`]
     .filter(Boolean)
     .join(" · ");

@@ -18,14 +18,19 @@ import path from "node:path";
 
 import { encode, createDecoder } from "./protocol.js";
 import { RollingBuffer } from "./buffer.js";
-import { ask } from "./claude.js";
+import { ask, COPILOT_PROMPT, harnessContext, CLAUDE_BIN } from "./claude.js";
 import { RateGuard, CircuitOpenError } from "./rateguard.js";
+import { LiveSession } from "./session.js";
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
 const SOCK = process.env.TERM_COPILOT_SOCK || path.join(os.homedir(), ".term-copilot.sock");
 
 // One shared buffer across all connected clients (a single terminal session for
 // now; M3 can key buffers per session id).
-const buffer = new RollingBuffer(16000);
+// Large scrollback so the read_terminal tool can page far back, while we inject
+// only a small slice into prompts. The tool is how the model sees more.
+const buffer = new RollingBuffer(200000);
 
 // The terminal's current working directory, reported by the client. CLAUDE.md /
 // rules resolve from here (see claude.js). Falls back to the bridge's cwd.
@@ -59,7 +64,9 @@ function toolDetail(name, input) {
 // Permission callback handed to the Agent SDK. Returns a PermissionResult.
 function makeCanUseTool() {
   return (name, input) => {
-    if (READONLY_TOOLS.has(name)) return { behavior: "allow", updatedInput: input };
+    if (READONLY_TOOLS.has(name) || name === TERMINAL_TOOL) {
+      return { behavior: "allow", updatedInput: input };
+    }
     const sig = toolSignature(name, input);
     if (tools.allow.has(sig) || tools.allow.has(name + ":*")) {
       return { behavior: "allow", updatedInput: input };
@@ -80,6 +87,104 @@ function makeCanUseTool() {
   };
 }
 
+// ---- read_terminal tool ------------------------------------------------
+// Lets the model page into the large scrollback on demand instead of us
+// dumping it all into the prompt. Read-only, so it's auto-allowed.
+const TERMINAL_TOOL = "mcp__terminal__read_terminal";
+
+function readScrollback({ tail_lines, search, max_chars }) {
+  const cap = Math.min(max_chars || 6000, 20000);
+  let text = buffer.text;
+  if (search) {
+    const hits = text.split("\n").filter((l) => l.includes(search));
+    text = hits.length ? hits.join("\n") : `(no lines contain "${search}")`;
+  } else if (tail_lines) {
+    text = text.split("\n").slice(-tail_lines).join("\n");
+  }
+  if (text.length > cap) text = "…(truncated)…\n" + text.slice(text.length - cap);
+  return text || "(terminal buffer empty)";
+}
+
+const terminalServer = createSdkMcpServer({
+  name: "terminal",
+  version: "1.0.0",
+  tools: [
+    tool(
+      "read_terminal",
+      "Read more of the user's terminal scrollback than the snapshot you were given. " +
+        "Use it to see earlier output that scrolled off, or to search the buffer.",
+      {
+        tail_lines: z.number().int().positive().optional().describe("Return the last N lines"),
+        search: z.string().optional().describe("Return only lines containing this substring"),
+        max_chars: z.number().int().positive().optional().describe("Max characters to return (default 6000)"),
+      },
+      async (args) => ({ content: [{ type: "text", text: readScrollback(args) }] }),
+    ),
+  ],
+});
+
+// ---- live session lifecycle --------------------------------------------
+function buildSessionOptions() {
+  const opts = {
+    systemPrompt: COPILOT_PROMPT,
+    includePartialMessages: true,
+    pathToClaudeCodeExecutable: CLAUDE_BIN,
+    cwd: termCwd || process.cwd(),
+    settingSources: ["user", "project", "local"],
+    // read_terminal is always available in a session (read-only); workspace
+    // tools are added only when the tools toggle is on.
+    allowedTools: [TERMINAL_TOOL, ...(tools.on ? TOOLSET : [])],
+    maxTurns: tools.on ? 16 : 4, // a few turns so it can page the terminal then answer
+    mcpServers: { terminal: terminalServer },
+  };
+  if (tools.on) {
+    opts.permissionMode = "default";
+    opts.canUseTool = makeCanUseTool();
+  }
+  return opts;
+}
+
+let lastSlash = [];
+function startLiveSession() {
+  if (session.live) return;
+  session.firstTurn = true;
+  session.live = new LiveSession(buildSessionOptions(), {
+    onChunk: (t) => broadcast({ type: "chat_stream", text: t }),
+    onTool: (t) => broadcast({ type: "tool_use", name: t.name, detail: toolDetail(t.name, t.input) }),
+    onResult: () => broadcast({ type: "chat_done" }),
+    onContext: (cu) =>
+      broadcast({
+        type: "context",
+        session: true,
+        tokens: cu.totalTokens,
+        max: cu.maxTokens,
+        percentage: cu.percentage,
+        categories: (cu.categories || []).map((c) => ({ name: c.name, tokens: c.tokens, color: c.color })),
+      }),
+    onSlash: (cmds) => {
+      lastSlash = cmds;
+      broadcast({ type: "slash_commands", commands: cmds });
+    },
+    onRate: (info) =>
+      broadcast({ type: "rate_limited", error: "rate limited (" + (info.rateLimitType || "?") + ")", rateLimitType: info.rateLimitType }),
+    onError: (e) => {
+      log("session error:", e.message);
+      broadcast({ type: "chat_error", error: String(e.message || e) });
+    },
+  });
+  session.live.start();
+  log("live session started");
+}
+
+function stopLiveSession() {
+  if (session.live) {
+    session.live.stop();
+    session.live = null;
+    lastSlash = [];
+    log("live session stopped");
+  }
+}
+
 // One breaker shared across clients — the rate limit is account-wide.
 const guard = new RateGuard();
 
@@ -89,10 +194,10 @@ let history = [];
 const MAX_HISTORY_TURNS = 24; // 12 exchanges
 
 // ---- session mode (running context window) -----------------------------
-// Off by default (cheap stateless Q&A). When on, we resume one persistent SDK
-// session so context accumulates and the SDK auto-compacts it when it fills.
-const session = { on: false, id: null };
-const CONTEXT_MAX = 200000; // model window; used for the fill meter %
+// Off by default (cheap stateless Q&A). When on, a LiveSession keeps one
+// streaming query alive — the running context window — with segmented usage and
+// slash commands. SDK auto-compacts it when full (CLAUDE.md preserved).
+const session = { on: false, live: null, firstTurn: true };
 
 // ---- watch mode --------------------------------------------------------
 // Periodically summarize NEW terminal activity — but only when the buffer
@@ -134,7 +239,7 @@ async function watchTick() {
     let text = "";
     await guard.run(() =>
       ask({
-        terminalContext: buffer.tail(),
+        terminalContext: buffer.tail(8000),
         userMessage: WATCH_PROMPT,
         cwd: termCwd,
         history: [], // watch ticks are stateless
@@ -197,7 +302,8 @@ const server = net.createServer((sock) => {
     }
     if (msg.type === "session") {
       session.on = !!msg.on;
-      if (!session.on) session.id = null; // drop the running window
+      if (session.on) startLiveSession();
+      else stopLiveSession();
       log(`session ${session.on ? "on" : "off"}`);
       broadcast({ type: "session_state", on: session.on });
       return;
@@ -231,6 +337,28 @@ const server = net.createServer((sock) => {
       const text = (msg.text || "").trim();
       log(`chat_msg: ${JSON.stringify(text.slice(0, 80))}`);
       if (!text) return;
+
+      // Session mode: route through the live streaming session. A leading "/"
+      // is sent verbatim so the SDK executes it as a slash command.
+      if (session.on) {
+        if (!session.live) startLiveSession();
+        if (text.startsWith("/")) {
+          session.live.send(text);
+        } else if (session.firstTurn) {
+          session.firstTurn = false;
+          session.live.send(
+            harnessContext({ cwd: termCwd, shell: ENV_META.shell, os: ENV_META.os, mode: "chat" }) +
+              `<recent_terminal_output>\n${buffer.tail(4000)}\n</recent_terminal_output>\n\nUser: ${text}`,
+          );
+        } else {
+          session.live.send(
+            `<recent_terminal_output>\n${buffer.tail(1500)}\n</recent_terminal_output>\n\nUser: ${text}`,
+          );
+        }
+        log(`session msg: ${JSON.stringify(text.slice(0, 60))}`);
+        return;
+      }
+
       try {
         const result = await guard.run(() =>
           ask({
@@ -238,8 +366,6 @@ const server = net.createServer((sock) => {
             userMessage: text,
             cwd: termCwd,
             history,
-            sessionMode: session.on,
-            sessionId: session.id,
             meta: Object.assign({ mode: "chat", tools: tools.on }, ENV_META),
             tools: tools.on
               ? {
@@ -253,29 +379,14 @@ const server = net.createServer((sock) => {
             onChunk: (chunk) => send({ type: "chat_stream", text: chunk }),
           }),
         );
-        if (session.on) {
-          // Running window: the SDK holds the conversation; track its id.
-          if (result?.sessionId) session.id = result.sessionId;
-        } else {
-          // Stateless: keep our own trimmed transcript for replay.
-          history.push({ role: "user", text });
-          history.push({ role: "assistant", text: result?.text || "" });
-          if (history.length > MAX_HISTORY_TURNS) {
-            history = history.slice(history.length - MAX_HISTORY_TURNS);
-          }
-        }
-        // Context fill meter (total tokens held this turn vs the window).
-        if (result?.contextTokens) {
-          broadcast({
-            type: "context",
-            tokens: result.contextTokens,
-            max: CONTEXT_MAX,
-            percentage: Math.min(100, Math.round((result.contextTokens / CONTEXT_MAX) * 100)),
-            session: session.on,
-          });
+        // Stateless: keep our own trimmed transcript for replay.
+        history.push({ role: "user", text });
+        history.push({ role: "assistant", text: result?.text || "" });
+        if (history.length > MAX_HISTORY_TURNS) {
+          history = history.slice(history.length - MAX_HISTORY_TURNS);
         }
         send({ type: "chat_done" });
-        log("chat_done" + (session.on ? ` · ctx ${result?.contextTokens || 0}` : ""));
+        log("chat_done");
       } catch (err) {
         if (err instanceof CircuitOpenError) {
           // Rate-limited: tell the client when to try again, don't treat as a
@@ -313,6 +424,7 @@ const server = net.createServer((sock) => {
   send({ type: "watch_state", on: watch.on, intervalMs: watch.intervalMs });
   send({ type: "tools_state", on: tools.on });
   send({ type: "session_state", on: session.on });
+  if (lastSlash.length) send({ type: "slash_commands", commands: lastSlash });
 });
 
 server.listen(SOCK, () => {

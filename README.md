@@ -58,11 +58,17 @@ below for detail.
   grep, and run commands in your terminal's directory. Read-only is auto-allowed;
   mutating actions (Bash/Edit/Write) require approval, with a per-session
   allow-list so you don't re-approve the same action.
-- **Session mode** — opt-in running conversation window (like Claude Code):
-  resumes one persistent SDK session so context accumulates, with the SDK's
-  built-in auto-compaction when it fills (CLAUDE.md is preserved). A context
-  meter in the panel shows how full the window is. Off by default (stateless
-  Q&A is cheaper).
+- **Session mode** — opt-in running conversation window (like Claude Code): a
+  persistent streaming SDK session so context accumulates, with the SDK's
+  built-in auto-compaction when it fills (CLAUDE.md preserved). A **segmented
+  context meter** (system / tools / messages / free) shows how full the window
+  is. Off by default (stateless Q&A is cheaper).
+- **Slash commands** — in session mode, type `/` to autocomplete the SDK's
+  commands (`/compact`, `/context`, `/clear`, `/usage`, …); they execute in the
+  live session.
+- **Terminal paging** — a `read_terminal` tool lets the model page into a large
+  scrollback on demand, so prompts inject only a small slice instead of dumping
+  everything.
 - **Watch mode** — opt-in live updates that summarize new activity, with
   guardrails so an idle terminal costs nothing.
 - **Rate-limit resilient** — a circuit breaker that respects the server's reset
