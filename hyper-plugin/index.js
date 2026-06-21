@@ -237,7 +237,7 @@ exports.decorateHyper = (Hyper, { React }) => {
     onHotkey(e) {
       if (e.metaKey && e.shiftKey && (e.key === "l" || e.key === "L")) {
         e.preventDefault();
-        this._ask("Look at what's on my screen right now and explain it.");
+        this._ask("(Take a quick look at what's on my screen now and factor it into what we're discussing — no need to explain it from scratch.)");
       }
     }
 
