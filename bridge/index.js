@@ -15,6 +15,7 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { encode, createDecoder } from "./protocol.js";
 import { RollingBuffer } from "./buffer.js";
@@ -47,7 +48,6 @@ const TOOLSET = ["Read", "Grep", "Glob", "LS", "Bash", "Edit", "Write", "MultiEd
 const READONLY_TOOLS = new Set(["Read", "Grep", "Glob", "LS", "NotebookRead"]);
 const tools = { on: false, allow: new Set() }; // allow = session-approved signatures
 const pendingPerms = new Map(); // id -> resolver
-let permSeq = 0;
 
 function toolSignature(name, input) {
   if (name === "Bash") return "Bash:" + (input.command || "");
@@ -71,7 +71,10 @@ function makeCanUseTool() {
     if (tools.allow.has(sig) || tools.allow.has(name + ":*")) {
       return { behavior: "allow", updatedInput: input };
     }
-    const id = "perm" + ++permSeq;
+    // Unguessable, not sequential: a connected peer on the socket must not
+    // be able to predict/race a pending permission id and auto-approve a
+    // tool call before the real user responds.
+    const id = "perm-" + randomUUID();
     broadcast({ type: "permission_request", id, name, detail: toolDetail(name, input), signature: sig });
     return new Promise((resolve) => {
       pendingPerms.set(id, (resp) => {
@@ -623,6 +626,10 @@ const server = net.createServer((sock) => {
 });
 
 server.listen(SOCK, () => {
+  // A Unix socket's permissions default to the process umask, which is
+  // typically world-connectable - any other local account could read live
+  // terminal output and drive the agent as this user. Lock it to owner-only.
+  fs.chmodSync(SOCK, 0o600);
   log(`listening on ${SOCK}`);
   log(process.env.ANTHROPIC_API_KEY
     ? "auth: ANTHROPIC_API_KEY set (API billing!)"
