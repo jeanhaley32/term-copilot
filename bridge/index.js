@@ -61,10 +61,29 @@ function toolDetail(name, input) {
   return JSON.stringify(input).slice(0, 200);
 }
 
+// Paths a read-only tool may touch without prompting. Terminal output is
+// untrusted (curl output, CI logs, anything pasted) and is fed into the model's
+// context, so an injected instruction could otherwise make an auto-allowed
+// Read/Grep/LS pull ~/.ssh/id_rsa or ~/.aws/credentials with no prompt. Reads
+// inside the terminal's own cwd are what the feature is for; anything outside
+// falls through to the normal permission prompt rather than being denied.
+function readTargets(input) {
+  const fields = [input.file_path, input.path, input.notebook_path];
+  return fields.filter((v) => typeof v === "string" && v.length > 0);
+}
+function withinCwd(target) {
+  const root = path.resolve(termCwd || process.cwd());
+  const resolved = path.resolve(root, target);
+  return resolved === root || resolved.startsWith(root + path.sep);
+}
+
 // Permission callback handed to the Agent SDK. Returns a PermissionResult.
 function makeCanUseTool() {
   return (name, input) => {
-    if (READONLY_TOOLS.has(name) || name === TERMINAL_TOOL) {
+    if (name === TERMINAL_TOOL) {
+      return { behavior: "allow", updatedInput: input };
+    }
+    if (READONLY_TOOLS.has(name) && readTargets(input).every(withinCwd)) {
       return { behavior: "allow", updatedInput: input };
     }
     const sig = toolSignature(name, input);
